@@ -109,7 +109,7 @@ sealed class WorkflowStep<I : Input, E : Event> {
     ) : WorkflowStep<I, E>()
 
     data class Async<I : Input, E : Event>(
-        val step: suspend (WorkflowResult, Context) -> Deferred<Either<WorkflowError, WorkflowResult>>
+        val step: suspend (WorkflowResult, Context) -> Either<WorkflowError, WorkflowResult>
     ) : WorkflowStep<I, E>()
 }
 
@@ -166,7 +166,7 @@ internal class SequentialWorkflowChainBuilder<I : Input, E : Event> : BaseWorkfl
                         val result = (currentResult as Either.Right).value
                         val nextResult = when (workflow) {
                             is WorkflowStep.Sync -> workflow.step(result, currentContext)
-                            is WorkflowStep.Async -> workflow.step(result, currentContext).await()
+                            is WorkflowStep.Async -> workflow.step(result, currentContext)
                         }
                         currentResult = nextResult.fold(
                             { currentResult },
@@ -192,7 +192,7 @@ internal class ParallelWorkflowChainBuilder<I : Input, E : Event> : BaseWorkflow
     ) {
         workflows.add(WorkflowStep.Async { result, context ->
             coroutineScope {
-                async { workflow.execute(inputMapper(result), context) }
+                workflow.execute(inputMapper(result), context)
             }
         })
     }
@@ -205,9 +205,9 @@ internal class ParallelWorkflowChainBuilder<I : Input, E : Event> : BaseWorkflow
         workflows.add(WorkflowStep.Async { result, context ->
             coroutineScope {
                 if (predicate(result)) {
-                    async { workflow.execute(inputMapper(result), context) }
+                    workflow.execute(inputMapper(result), context)
                 } else {
-                    async { WorkflowResult(context, emptyList()).right() }
+                    WorkflowResult(context, emptyList()).right()
                 }
             }
         })
@@ -218,9 +218,11 @@ internal class ParallelWorkflowChainBuilder<I : Input, E : Event> : BaseWorkflow
             override suspend fun execute(input: I, result: WorkflowResult): Either<WorkflowError, WorkflowResult> {
                 val deferredResults = coroutineScope {
                     workflows.map { workflow ->
-                        when (workflow) {
-                            is WorkflowStep.Sync -> async { workflow.step(result, result.context) }
-                            is WorkflowStep.Async -> workflow.step(result, result.context)
+                        async {
+                            when (workflow) {
+                                is WorkflowStep.Sync -> workflow.step(result, result.context)
+                                is WorkflowStep.Async -> workflow.step(result, result.context)
+                            }
                         }
                     }
                 }

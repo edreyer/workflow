@@ -3,6 +3,7 @@ package com.toasttab.workflow
 import arrow.core.Either
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 
 // Define the commands
@@ -27,6 +28,7 @@ class CreateUserWorkflow : Workflow<CreateUserCommand, UserCreatedEvent>() {
 class CreateUserPreferencesWorkflow : Workflow<CreateUserPreferencesCommand, UserPreferencesCreatedEvent>() {
     override suspend fun executeWorkflow(input: CreateUserPreferencesCommand, context: Context): Either<WorkflowError, WorkflowResult> {
         val event = UserPreferencesCreatedEvent(input.userId, Instant.now(), input.preferences)
+        delay(1000)
         return Either.Right(WorkflowResult(context, listOf(event)))
     }
 }
@@ -34,6 +36,7 @@ class CreateUserPreferencesWorkflow : Workflow<CreateUserPreferencesCommand, Use
 class SendWelcomeEmailWorkflow : Workflow<SendWelcomeEmailCommand, WelcomeEmailSentEvent>() {
     override suspend fun executeWorkflow(input: SendWelcomeEmailCommand, context: Context): Either<WorkflowError, WorkflowResult> {
         val event = WelcomeEmailSentEvent(input.userId, Instant.now(), input.email)
+        delay(1000)
         return Either.Right(WorkflowResult(context, listOf(event)))
     }
 }
@@ -45,7 +48,7 @@ fun main() {
 
     val useCase = useCase(createUserWorkflow) {
         runParallel(true)
-        thenIf(createUserPreferencesWorkflow, { result -> result.events.isNotEmpty() }) { result ->
+        then(createUserPreferencesWorkflow) { result ->
             val userId = result.context.getData("userId") as UUID
             CreateUserPreferencesCommand(userId, mapOf("theme" to "dark", "notifications" to "enabled"))
         }
@@ -58,7 +61,11 @@ fun main() {
 
     val input = CreateUserCommand(UUID.randomUUID(), "John Doe")
 
+    val start = System.currentTimeMillis()
     val result = runBlocking { useCase.execute(input) }
+    val end = System.currentTimeMillis()
+
+    println("Workflow executed in ${end - start} ms")
 
     when (result) {
         is Either.Right -> {
