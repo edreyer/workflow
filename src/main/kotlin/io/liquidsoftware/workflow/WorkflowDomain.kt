@@ -24,7 +24,7 @@ data class WorkflowResult(
     val context: WorkflowContext = WorkflowContext(),
     val events: List<Event> = emptyList<Event>()) {
 
-    inline fun <reified T : Event, R> getFieldFromEvent(property: KProperty1<T, R>): R? {
+    inline fun <reified T : Event, R> getFromEvent(property: KProperty1<T, R>): R? {
         val event = events.filterIsInstance<T>().firstOrNull() ?: return null
         return property.get(event)
     }
