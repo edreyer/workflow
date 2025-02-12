@@ -108,5 +108,3 @@ Each workflow gracefully handles errors by returning an Either type. The propose
   As the project evolves, this README will be updated to include new features or improvements to the Workflow DSL and Error handling mechanisms.
 
 ---
-
-This README aims to provide clarity on the purpose and implementation of the Workflow and UseCase pattern. It serves as a guide for developers to integrate this pattern into their projects, ensuring clean code architecture and maintainability.
