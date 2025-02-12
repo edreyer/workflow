@@ -56,12 +56,14 @@ data class InventoryVerifiedEvent(
     val availableItems: List<OrderItem>
 ) : Event
 
+sealed interface Payment
+data class FailedPayment(val orderId: UUID, val amount: Double) : Payment
+data class SuccessfulPayment(val orderId: UUID, val amount: Double, val transactionId: UUID) : Payment
+
 data class PaymentProcessedEvent(
     override val id: UUID,
     override val timestamp: Instant,
-    val orderId: UUID,
-    val transactionId: UUID,
-    val amount: Double
+    val payment: Payment
 ) : Event
 
 data class ShipmentPreparedEvent(
@@ -121,9 +123,11 @@ class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentC
         val event = PaymentProcessedEvent(
             id = UUID.randomUUID(),
             timestamp = Instant.now(),
-            orderId = input.orderId,
-            transactionId = UUID.randomUUID(),
-            amount = input.amount
+            payment = SuccessfulPayment(
+              orderId = input.orderId,
+              transactionId = UUID.randomUUID(),
+              amount = input.amount
+            )
         )
         WorkflowResult(listOf(event))
     }
@@ -176,9 +180,13 @@ fun main() {
 
     thenIf(PrepareShipmentWorkflow("prepare-shipment"),
       predicate = { result ->
+        val paymentSuccessful = when(result.getFromEvent(PaymentProcessedEvent::payment)) {
+          is SuccessfulPayment -> true
+          else -> false
+        }
+
         // Check previous events to determine if we should proceed
-        result.context.getData("inventoryAvailable") == true &&
-        result.events.any { it is PaymentProcessedEvent }
+        result.context.getData("inventoryAvailable") == true && paymentSuccessful
       }
     ) { result ->
       // Transform previous events into the shipment command
@@ -198,7 +206,7 @@ fun main() {
   when (val result = runBlocking { orderProcessingUseCase.execute(initialCommand) }) {
     is Either.Right -> {
       println("Order processing completed successfully!")
-      result.value.events.forEach { event ->
+      result.value.events.sortedBy { it.timestamp }.forEach { event ->
         println("Event: ${event::class.simpleName}")
       }
       // Access final events if needed
