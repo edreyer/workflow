@@ -10,14 +10,13 @@ abstract class Workflow<I : Input, E: Event> {
 
     abstract val id: String
 
-    protected abstract suspend fun executeWorkflow(input: I, context: WorkflowContext): Either<WorkflowError, WorkflowResult>
+    protected abstract suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult>
 
     suspend fun execute(input: I): Either<WorkflowError, WorkflowResult> {
-        val context = WorkflowContext()
         val startTime = Instant.now()
         val result = either {
             try {
-                executeWorkflow(input, context).bind()
+                executeWorkflow(input).bind()
             } catch (ex: Exception) {
                 raise(ExceptionError("An exception occurred", ex))
             }
@@ -33,7 +32,7 @@ abstract class Workflow<I : Input, E: Event> {
         )
 
         val updatedContext = result.fold(
-            { context.addExecution(execution)},
+            { WorkflowContext().addExecution(execution)},
             { wr -> wr.context.addExecution(execution) }
         )
 

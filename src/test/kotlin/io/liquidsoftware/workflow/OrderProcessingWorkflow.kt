@@ -72,8 +72,7 @@ data class ShipmentPreparedEvent(
 // Workflow Implementations
 class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCommand, OrderValidatedEvent>() {
     override suspend fun executeWorkflow(
-        input: ValidateOrderCommand,
-        context: WorkflowContext
+        input: ValidateOrderCommand
     ): Either<WorkflowError, WorkflowResult> {
         // Simulate order validation
         if (input.items.isEmpty()) {
@@ -87,14 +86,13 @@ class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCom
             shippingAddress = "123 Main St", // Simplified for example
             items = input.items
         )
-        return Either.Right(WorkflowResult(context, listOf(event)))
+        return Either.Right(WorkflowResult(listOf(event)))
     }
 }
 
 class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryCommand, InventoryVerifiedEvent>() {
     override suspend fun executeWorkflow(
-        input: CheckInventoryCommand,
-        context: WorkflowContext
+        input: CheckInventoryCommand
     ): Either<WorkflowError, WorkflowResult> {
         // Simulate inventory check
         delay(1000) // Simulate external service call
@@ -108,16 +106,15 @@ class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryC
 
 
         return Either.Right(WorkflowResult(
-          context.addData("inventoryAvailable", true),
-          listOf(event))
+          listOf(event),
+          WorkflowContext().addData("inventoryAvailable", true),),
         )
     }
 }
 
 class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentCommand, PaymentProcessedEvent>() {
     override suspend fun executeWorkflow(
-        input: ProcessPaymentCommand,
-        context: WorkflowContext
+        input: ProcessPaymentCommand
     ): Either<WorkflowError, WorkflowResult> {
         // Simulate payment processing
         delay(1500) // Simulate external payment gateway call
@@ -129,14 +126,13 @@ class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentC
             transactionId = UUID.randomUUID(),
             amount = input.amount
         )
-        return Either.Right(WorkflowResult(context, listOf(event)))
+        return Either.Right(WorkflowResult(listOf(event)))
     }
 }
 
 class PrepareShipmentWorkflow(override val id: String) : Workflow<PrepareShipmentCommand, ShipmentPreparedEvent>() {
   override suspend fun executeWorkflow(
-    input: PrepareShipmentCommand,
-    context: WorkflowContext
+    input: PrepareShipmentCommand
   ): Either<WorkflowError, WorkflowResult> {
     val event = ShipmentPreparedEvent(
       id = UUID.randomUUID(),
@@ -144,7 +140,7 @@ class PrepareShipmentWorkflow(override val id: String) : Workflow<PrepareShipmen
       orderId = input.orderId,
       trackingNumber = "TRACK-${UUID.randomUUID().toString().take(8)}"
     )
-    return Either.Right(WorkflowResult(context, listOf(event)))
+    return Either.Right(WorkflowResult(listOf(event)))
   }
 }
 

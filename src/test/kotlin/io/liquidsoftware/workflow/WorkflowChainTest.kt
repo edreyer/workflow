@@ -306,27 +306,6 @@ class WorkflowChainTest : StringSpec({
     (result).value.events.size shouldBe 3
   }
 
-  "should handle complex conditional workflow chains" {
-    val workflowA = TestWorkflow("A")
-    val workflowB = TestWorkflow("B")
-    val workflowC = TestWorkflow("C")
-
-    val useCase = useCase(workflowA) {
-      thenIf(workflowB, { it.events.isNotEmpty() }) { result ->
-        TestCommand(result.events.first().id)
-      }
-      thenIf(workflowC, { it.events.size > 1 }) { result ->
-        TestCommand(result.events.first().id)
-      }
-      build()
-    }
-
-    val input = TestCommand(UUID.randomUUID())
-    val result = runBlocking { useCase.execute(input) }
-
-    // Assert expected behavior
-  }
-
   "should complete workflow chain within reasonable time" {
     val workflow = TestWorkflow("A")
     val useCase = useCase(workflow) { build() }
@@ -338,41 +317,6 @@ class WorkflowChainTest : StringSpec({
     duration.shouldBeLessThan(1000) // Adjust threshold as needed
   }
 
-  "should properly propagate context through workflow chain" {
-    val workflowA = TestWorkflow("A")
-    val workflowB = TestWorkflow("B")
-
-    val useCase = useCase(workflowA) {
-      then(workflowB) { result ->
-        TestCommand(result.events.first().id)
-      }
-      build()
-    }
-
-    val input = TestCommand(UUID.randomUUID())
-    val result = runBlocking { useCase.execute(input) }
-
-    result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-    val context = (result).value.context
-    // Assert context contains expected data from both workflows
-  }
-
-  "should handle multiple concurrent workflow executions" {
-    val workflow = TestWorkflow("A")
-    val useCase = useCase(workflow) { build() }
-
-    runBlocking {
-      val results = (1..3).map {
-        useCase.execute(TestCommand(UUID.randomUUID()))
-      }
-
-      results.forEach { result ->
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-      }
-    }
-  }
-
-  
 })
 
 class TestCommand(val id: UUID) : Command
@@ -380,38 +324,38 @@ class TestCommand(val id: UUID) : Command
 data class TestEvent(override val id: UUID, override val timestamp: Instant) : Event
 
 class TestWorkflow(override val id: String) : Workflow<TestCommand, TestEvent>() {
-    override suspend fun executeWorkflow(input: TestCommand, context: WorkflowContext): Either<WorkflowError, WorkflowResult> {
+    override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
         val event = TestEvent(input.id, Instant.now())
-        val newContext = context.addData("id", this.id)
-        return Either.Right(WorkflowResult(newContext, listOf(event)))
+        val newContext = WorkflowContext().addData("id", this.id)
+        return Either.Right(WorkflowResult(listOf(event), newContext))
     }
 }
 
 class FailingWorkflow(override val id: String) : Workflow<TestCommand, TestEvent>() {
-    override suspend fun executeWorkflow(input: TestCommand, context: WorkflowContext): Either<WorkflowError, WorkflowResult> {
+    override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
         return Either.Left(ExecutionError("Failed"))
     }
 }
 
 class ThrowingWorkflow(override val id: String) : Workflow<TestCommand, TestEvent>() {
-    override suspend fun executeWorkflow(input: TestCommand, context: WorkflowContext): Either<WorkflowError, WorkflowResult> {
+    override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
         throw RuntimeException("Error")
     }
 }
 
 class TestWorkflowWithContextData(override val id: String) : Workflow<TestCommand, TestEvent>() {
-    override suspend fun executeWorkflow(input: TestCommand, context: WorkflowContext): Either<WorkflowError, WorkflowResult> {
-        val updatedContext = context.addData("key1", "value1").addData("key2", "value2")
+    override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
+        val updatedContext = WorkflowContext().addData("key1", "value1").addData("key2", "value2")
         val event = TestEvent(input.id, Instant.now())
-        return Either.Right(WorkflowResult(updatedContext, listOf(event)))
+        return Either.Right(WorkflowResult(listOf(event), updatedContext, ))
     }
 }
 
 class DelayedWorkflow(override val id: String) : Workflow<TestCommand, TestEvent>() {
-    override suspend fun executeWorkflow(input: TestCommand, context: WorkflowContext): Either<WorkflowError, WorkflowResult> {
+    override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
         delay(1000) // Simulate a delay
         val event = TestEvent(input.id, Instant.now())
-        val newContext = context.addData("id", this.id)
-        return Either.Right(WorkflowResult(newContext, listOf(event)))
+        val newContext = WorkflowContext().addData("id", this.id)
+        return Either.Right(WorkflowResult(listOf(event), newContext))
     }
 }

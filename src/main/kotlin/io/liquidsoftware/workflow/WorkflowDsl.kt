@@ -126,7 +126,7 @@ internal class ParallelWorkflowChainBuilder<I : Input, E : Event> : BaseWorkflow
                 if (predicate(result)) {
                     result.mapInputAndExecuteNext(inputMapper, workflow)
                 } else {
-                    WorkflowResult(context, emptyList()).right()
+                    WorkflowResult(emptyList(), context).right()
                 }
             }
         })
