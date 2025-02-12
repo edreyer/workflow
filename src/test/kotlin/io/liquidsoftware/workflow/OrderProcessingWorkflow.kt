@@ -1,6 +1,8 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
+import arrow.core.raise.either
+import arrow.core.raise.ensure
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.time.Instant
@@ -73,11 +75,9 @@ data class ShipmentPreparedEvent(
 class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCommand, OrderValidatedEvent>() {
     override suspend fun executeWorkflow(
         input: ValidateOrderCommand
-    ): Either<WorkflowError, WorkflowResult> {
+    ): Either<WorkflowError, WorkflowResult> = either {
         // Simulate order validation
-        if (input.items.isEmpty()) {
-            return Either.Left(WorkflowError.ValidationError("Order must contain at least one item"))
-        }
+      ensure(!input.items.isEmpty()) { WorkflowError.ValidationError("Order must contain at least one item") }
 
         val event = OrderValidatedEvent(
             id = UUID.randomUUID(),
@@ -86,14 +86,14 @@ class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCom
             shippingAddress = "123 Main St", // Simplified for example
             items = input.items
         )
-        return Either.Right(WorkflowResult(listOf(event)))
+        WorkflowResult(listOf(event))
     }
 }
 
 class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryCommand, InventoryVerifiedEvent>() {
     override suspend fun executeWorkflow(
         input: CheckInventoryCommand
-    ): Either<WorkflowError, WorkflowResult> {
+    ): Either<WorkflowError, WorkflowResult> = either {
         // Simulate inventory check
         delay(1000) // Simulate external service call
 
@@ -104,10 +104,9 @@ class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryC
             availableItems = input.items
         )
 
-
-        return Either.Right(WorkflowResult(
+        WorkflowResult(
           listOf(event),
-          WorkflowContext().addData("inventoryAvailable", true),),
+          WorkflowContext().addData("inventoryAvailable", true)
         )
     }
 }
@@ -115,7 +114,7 @@ class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryC
 class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentCommand, PaymentProcessedEvent>() {
     override suspend fun executeWorkflow(
         input: ProcessPaymentCommand
-    ): Either<WorkflowError, WorkflowResult> {
+    ): Either<WorkflowError, WorkflowResult> = either {
         // Simulate payment processing
         delay(1500) // Simulate external payment gateway call
 
@@ -126,21 +125,21 @@ class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentC
             transactionId = UUID.randomUUID(),
             amount = input.amount
         )
-        return Either.Right(WorkflowResult(listOf(event)))
+        WorkflowResult(listOf(event))
     }
 }
 
 class PrepareShipmentWorkflow(override val id: String) : Workflow<PrepareShipmentCommand, ShipmentPreparedEvent>() {
   override suspend fun executeWorkflow(
     input: PrepareShipmentCommand
-  ): Either<WorkflowError, WorkflowResult> {
+  ): Either<WorkflowError, WorkflowResult> = either {
     val event = ShipmentPreparedEvent(
       id = UUID.randomUUID(),
       timestamp = Instant.now(),
       orderId = input.orderId,
       trackingNumber = "TRACK-${UUID.randomUUID().toString().take(8)}"
     )
-    return Either.Right(WorkflowResult(listOf(event)))
+    WorkflowResult(listOf(event))
   }
 }
 
