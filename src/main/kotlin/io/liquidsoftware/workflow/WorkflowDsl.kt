@@ -160,6 +160,27 @@ internal class ParallelWorkflowChainBuilder<I : Input, E : Event> : BaseWorkflow
     }
 }
 
+class ParallelBlock<I : Input, E : Event> internal constructor() {
+    private val builder = ParallelWorkflowChainBuilder<I, E>()
+
+    fun <C : Input, R : Event> then(
+        workflow: Workflow<C, R>,
+        inputMapper: (WorkflowResult) -> C
+    ) {
+        builder.then(workflow, inputMapper)
+    }
+
+    fun <C : Input, R : Event> thenIf(
+        workflow: Workflow<C, R>,
+        predicate: (WorkflowResult) -> Boolean,
+        inputMapper: (WorkflowResult) -> C
+    ) {
+        builder.thenIf(workflow, predicate, inputMapper)
+    }
+
+    internal fun build() = builder.build()
+}
+
 class WorkflowChainBuilderFactory<I : Input, E : Event>(
     private val initialWorkflow: Workflow<I, E>
 ) {
@@ -171,13 +192,25 @@ class WorkflowChainBuilderFactory<I : Input, E : Event>(
         builders.add(currentBuilder)
     }
 
-    fun runParallel(runParallel: Boolean) {
-        this.runParallel = runParallel
-        currentBuilder = if (runParallel) {
-            ParallelWorkflowChainBuilder()
-        } else {
-            SequentialWorkflowChainBuilder()
-        }
+    fun parallel(block: ParallelBlock<I, E>.() -> Unit) {
+        val parallelBlock = ParallelBlock<I, E>()
+        parallelBlock.block()
+        builders.add(object : BaseWorkflowChainBuilder<I, E>() {
+            override fun <C : Input, R : Event> then(workflow: Workflow<C, R>, inputMapper: (WorkflowResult) -> C) {
+                throw UnsupportedOperationException("Cannot add workflows to a parallel block after it's created")
+            }
+
+            override fun <C : Input, R : Event> thenIf(
+                workflow: Workflow<C, R>,
+                predicate: (WorkflowResult) -> Boolean,
+                inputMapper: (WorkflowResult) -> C
+            ) {
+                throw UnsupportedOperationException("Cannot add workflows to a parallel block after it's created")
+            }
+
+            override fun build() = parallelBlock.build()
+        })
+        currentBuilder = SequentialWorkflowChainBuilder()
         builders.add(currentBuilder)
     }
 
@@ -214,4 +247,3 @@ class WorkflowChainBuilderFactory<I : Input, E : Event>(
         }
     }
 }
-

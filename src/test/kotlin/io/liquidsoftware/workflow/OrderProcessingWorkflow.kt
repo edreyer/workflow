@@ -161,22 +161,19 @@ fun main() {
     initialWorkflow = ValidateOrderWorkflow("validate-order")
   ) {
     // After validation, run inventory check and payment processing in parallel
-    runParallel(true)
+    parallel {
+      then(CheckInventoryWorkflow("check-inventory")) { result ->
+        // Access the validated event from the previous workflow's result
+        val validatedEvent = result.events.filterIsInstance<OrderValidatedEvent>().first()
+        CheckInventoryCommand(validatedEvent.orderId, validatedEvent.items)
+      }
 
-    then(CheckInventoryWorkflow("check-inventory")) { result ->
-      // Access the validated event from the previous workflow's result
-      val validatedEvent = result.events.filterIsInstance<OrderValidatedEvent>().first()
-      CheckInventoryCommand(validatedEvent.orderId, validatedEvent.items)
+      then(ProcessPaymentWorkflow("process-payment")) { result ->
+        // Access the validated event from the previous workflow's result
+        val validatedEvent = result.events.filterIsInstance<OrderValidatedEvent>().first()
+        ProcessPaymentCommand(validatedEvent.orderId, customerId, totalAmount)
+      }
     }
-
-    then(ProcessPaymentWorkflow("process-payment")) { result ->
-      // Access the validated event from the previous workflow's result
-      val validatedEvent = result.events.filterIsInstance<OrderValidatedEvent>().first()
-      ProcessPaymentCommand(validatedEvent.orderId, customerId, totalAmount)
-    }
-
-    // Switch back to sequential for shipment preparation
-    runParallel(false)
 
     thenIf(PrepareShipmentWorkflow("prepare-shipment"),
       predicate = { result ->
@@ -186,7 +183,7 @@ fun main() {
         }
 
         // Check previous events to determine if we should proceed
-        result.context.getData("inventoryAvailable") == true && paymentSuccessful
+        result.context.getTypedData<Boolean>("inventoryAvailable") == true && paymentSuccessful
       }
     ) { result ->
       // Transform previous events into the shipment command

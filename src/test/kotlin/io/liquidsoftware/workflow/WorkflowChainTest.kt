@@ -1,20 +1,18 @@
 package io.liquidsoftware.workflow
+
 import arrow.core.Either
-import io.liquidsoftware.workflow.WorkflowError.CompositionError
-import io.liquidsoftware.workflow.WorkflowError.ExceptionError
 import io.liquidsoftware.workflow.WorkflowError.ExecutionError
-import io.kotest.core.spec.style.StringSpec
-import io.kotest.matchers.longs.shouldBeLessThan
-import io.kotest.matchers.shouldBe
-import io.kotest.matchers.types.shouldBeInstanceOf
-import kotlinx.coroutines.runBlocking
-import java.time.Instant
-import java.util.UUID
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Test
+import java.time.Instant
+import java.util.*
 
-class WorkflowChainTest : StringSpec({
+class WorkflowChainTest {
 
-    "should execute workflows in sequence" {
+    @Test
+    fun `should execute workflows in sequence`() {
         val initialWorkflow = TestWorkflow("A")
         val nextWorkflow = TestWorkflow("B")
 
@@ -26,14 +24,18 @@ class WorkflowChainTest : StringSpec({
         val input = TestCommand(UUID.randomUUID())
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-
-        (result).value.events.size shouldBe 2
-        val executions = (result).value.context.executions
-        executions.size shouldBe 2
+        assertTrue(result.isRight())
+        result.fold(
+            { fail("Expected Right but got Left: $it") },
+            {
+                assertEquals(2, it.events.size)
+                assertEquals(2, it.context.executions.size)
+            }
+        )
     }
 
-    "should not execute next workflow if previous failed" {
+    @Test
+    fun `should not execute next workflow if previous failed`() {
         val initialWorkflow = FailingWorkflow("F")
         val nextWorkflow = TestWorkflow("A")
 
@@ -43,13 +45,17 @@ class WorkflowChainTest : StringSpec({
         }
 
         val input = TestCommand(UUID.randomUUID())
-
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Left<ExecutionError>>()
+        assertTrue(result.isLeft())
+        result.fold(
+            { assertTrue(it is ExecutionError) },
+            { fail("Expected Left with ExecutionError but got Right: $it") }
+        )
     }
 
-    "should not execute next workflow if previous throws exception" {
+    @Test
+    fun `should not execute next workflow if previous throws exception`() {
         val initialWorkflow = ThrowingWorkflow("T")
         val nextWorkflow = TestWorkflow("A")
 
@@ -59,13 +65,20 @@ class WorkflowChainTest : StringSpec({
         }
 
         val input = TestCommand(UUID.randomUUID())
-
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Left<ExceptionError>>()
+        assertTrue(result.isLeft())
+        result.fold(
+            {
+                //assertTrue(it is WorkflowError, "Expected WorkflowError but got ${it.javaClass.simpleName}")
+                assertTrue(it is ExecutionError, "Expected ExecutionError but got ${it.javaClass.simpleName}")
+            },
+            { fail("Expected Left with ExecutionError but got Right: $it") }
+        )
     }
 
-    "should not execute next workflow if inputMapper throws" {
+    @Test
+    fun `should not execute next workflow if inputMapper throws`() {
         val initialWorkflow = ThrowingWorkflow("T")
         val nextWorkflow = TestWorkflow("A")
 
@@ -75,13 +88,20 @@ class WorkflowChainTest : StringSpec({
         }
 
         val input = TestCommand(UUID.randomUUID())
-
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Left<CompositionError>>()
+        assertTrue(result.isLeft())
+        result.fold(
+            {
+                //assertTrue(it is WorkflowError, "Expected WorkflowError but got ${it.javaClass.simpleName}")
+                assertTrue(it is ExecutionError, "Expected ExecutionError but got ${it.javaClass.simpleName}")
+            },
+            { fail("Expected Left with ExecutionError but got Right: $it") }
+        )
     }
 
-    "should execute next workflow if predicate is true" {
+    @Test
+    fun `should execute next workflow if predicate is true`() {
         val initialWorkflow = TestWorkflow("A")
         val nextWorkflow = TestWorkflow("B")
 
@@ -93,17 +113,16 @@ class WorkflowChainTest : StringSpec({
         }
 
         val input = TestCommand(UUID.randomUUID())
-
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        (result).value.events.size shouldBe 2
-
-        val executions = (result).value.context.executions
-        executions.size shouldBe 2
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(2, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(2, executions.size)
     }
 
-    "should not execute next workflow if predicate is false" {
+    @Test
+    fun `should not execute next workflow if predicate is false`() {
         val initialWorkflow = TestWorkflow("A")
         val nextWorkflow = TestWorkflow("B")
 
@@ -115,30 +134,27 @@ class WorkflowChainTest : StringSpec({
         }
 
         val input = TestCommand(UUID.randomUUID())
-
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        (result).value.events.size shouldBe 1
-
-        val executions = (result).value.context.executions
-        executions.size shouldBe 1
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(1, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(1, executions.size)
     }
 
-    "should return initial context and no events for empty workflow chain" {
+    @Test
+    fun `should return initial context and no events for empty workflow chain`() {
         val initialWorkflow = TestWorkflow("A")
-
         val useCase = useCase(initialWorkflow) { build() }
-
         val input = TestCommand(UUID.randomUUID())
-
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        (result).value.events.size shouldBe 1
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(1, (result as Either.Right<WorkflowResult>).value.events.size)
     }
 
-    "should execute multiple workflows in sequence" {
+    @Test
+    fun `should execute multiple workflows in sequence`() {
         val initialWorkflow = TestWorkflow("A")
         val secondWorkflow = TestWorkflow("B")
         val thirdWorkflow = TestWorkflow("C")
@@ -152,14 +168,14 @@ class WorkflowChainTest : StringSpec({
         val input = TestCommand(UUID.randomUUID())
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        (result).value.events.size shouldBe 3
-
-        val executions = (result).value.context.executions
-        executions.size shouldBe 3
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(3, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(3, executions.size)
     }
 
-    "should combine context data correctly" {
+    @Test
+    fun `should combine context data correctly`() {
         val initialWorkflow = TestWorkflowWithContextData("A")
         val nextWorkflow = TestWorkflowWithContextData("B")
 
@@ -171,16 +187,16 @@ class WorkflowChainTest : StringSpec({
         val input = TestCommand(UUID.randomUUID())
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        val combinedContext = (result).value.context
-        combinedContext.getData("key1") shouldBe "value1"
-        combinedContext.getData("key2") shouldBe "value2"
-
-        val executions = (result).value.context.executions
-        executions.size shouldBe 2
+        assertTrue(result is Either.Right<WorkflowResult>)
+        val combinedContext = (result as Either.Right<WorkflowResult>).value.context
+        assertEquals("value1", combinedContext.getTypedData<String>("key1"))
+        assertEquals("value2", combinedContext.getTypedData<String>("key2"))
+        val executions = result.value.context.executions
+        assertEquals(2, executions.size)
     }
 
-    "should record workflow execution timing" {
+    @Test
+    fun `should record workflow execution timing`() {
         val initialWorkflow = TestWorkflow("A")
         val nextWorkflow = TestWorkflow("B")
 
@@ -192,20 +208,22 @@ class WorkflowChainTest : StringSpec({
         val input = TestCommand(UUID.randomUUID())
         val result = runBlocking { useCase.execute(input) }
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        val executions = (result).value.context.executions
-        executions.size shouldBe 2
-        executions[0].workflowName shouldBe "TestWorkflow"
-        executions[1].workflowName shouldBe "TestWorkflow"
+        assertTrue(result is Either.Right<WorkflowResult>)
+        val executions = (result as Either.Right<WorkflowResult>).value.context.executions
+        assertEquals(2, executions.size)
+        assertEquals("TestWorkflow", executions[0].workflowName)
+        assertEquals("TestWorkflow", executions[1].workflowName)
     }
 
-    "should execute workflows in parallel" {
+    @Test
+    fun `should execute workflows in parallel`() {
         val initialWorkflow = TestWorkflow("A")
         val nextWorkflow = DelayedWorkflow("B")
 
         val useCase = useCase(initialWorkflow) {
-            runParallel(true)
-            then(nextWorkflow) { result -> TestCommand(result.events.first().id) }
+            parallel {
+                then(nextWorkflow) { result -> TestCommand(result.events.first().id) }
+            }
             build()
         }
 
@@ -215,25 +233,26 @@ class WorkflowChainTest : StringSpec({
         val result = runBlocking { useCase.execute(input) }
         val endTime = System.currentTimeMillis()
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        (result).value.events.size shouldBe 2
-
-        val executions = (result).value.context.executions
-        executions.size shouldBe 2
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(2, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(2, executions.size)
 
         // Check if the workflows were executed in parallel (total time should be less than the sum of individual delays)
-        (endTime - startTime) shouldBeLessThan 2000L
+        assertTrue(endTime - startTime < 2000L)
     }
 
-    "should execute multiple workflows in parallel" {
+    @Test
+    fun `should execute multiple workflows in parallel`() {
         val initialWorkflow = TestWorkflow("A")
         val secondWorkflow = DelayedWorkflow("B")
         val thirdWorkflow = DelayedWorkflow("C")
 
         val useCase = useCase(initialWorkflow) {
-            runParallel(true)
-            then(secondWorkflow) { result -> TestCommand(result.events.first().id) }
-            then(thirdWorkflow) { result -> TestCommand(result.events.first().id) }
+            parallel {
+                then(secondWorkflow) { result -> TestCommand(result.events.first().id) }
+                then(thirdWorkflow) { result -> TestCommand(result.events.first().id) }
+            }
             build()
         }
 
@@ -243,17 +262,17 @@ class WorkflowChainTest : StringSpec({
         val result = runBlocking { useCase.execute(input) }
         val endTime = System.currentTimeMillis()
 
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        (result).value.events.size shouldBe 3
-
-        val executions = (result).value.context.executions
-        executions.size shouldBe 3
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(3, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(3, executions.size)
 
         // Check if the workflows were executed in parallel (total time should be less than the sum of individual delays)
-        (endTime - startTime) shouldBeLessThan 3000L
+        assertTrue(endTime - startTime < 3000L)
     }
 
-    "should execute multiple workflows in parallel then multiple in sequence" {
+    @Test
+    fun `should execute multiple workflows in parallel then multiple in sequence`() {
         val initialWorkflow = TestWorkflow("A")
         val secondWorkflow = DelayedWorkflow("B")
         val thirdWorkflow = DelayedWorkflow("C")
@@ -261,10 +280,10 @@ class WorkflowChainTest : StringSpec({
         val fifthWorkflow = TestWorkflow("E")
 
         val useCase = useCase(initialWorkflow) {
-            runParallel(true)
-            then(secondWorkflow) { result -> TestCommand(result.events.first().id) }
-            then(thirdWorkflow) { result -> TestCommand(result.events.first().id) }
-            runParallel(false)
+            parallel {
+                then(secondWorkflow) { result -> TestCommand(result.events.first().id) }
+                then(thirdWorkflow) { result -> TestCommand(result.events.first().id) }
+            }
             then(fourthWorkflow) { result -> TestCommand(result.events.first().id) }
             then(fifthWorkflow) { result -> TestCommand(result.events.first().id) }
             build()
@@ -276,48 +295,130 @@ class WorkflowChainTest : StringSpec({
         val result = runBlocking { useCase.execute(input) }
         val endTime = System.currentTimeMillis()
 
-        println(result)
-
-        result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-        (result).value.events.size shouldBe 5
-
-        val executions = (result).value.context.executions
-        executions.size shouldBe 5
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(5, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(5, executions.size)
 
         // Check if the workflows were executed in parallel (total time should be less than the sum of individual delays)
-        (endTime - startTime) shouldBeLessThan 3000L
+        assertTrue(endTime - startTime < 3000L)
     }
 
-  "should execute three or more workflows in sequence" {
-    val workflowA = TestWorkflow("A")
-    val workflowB = TestWorkflow("B")
-    val workflowC = TestWorkflow("C")
+    @Test
+    fun `should execute three or more workflows in sequence`() {
+        val workflowA = TestWorkflow("A")
+        val workflowB = TestWorkflow("B")
+        val workflowC = TestWorkflow("C")
 
-    val useCase = useCase(workflowA) {
-      then(workflowB) { result -> TestCommand(result.events.first().id) }
-      then(workflowC) { result -> TestCommand(result.events.first().id) }
-      build()
+        val useCase = useCase(workflowA) {
+            then(workflowB) { result -> TestCommand(result.events.first().id) }
+            then(workflowC) { result -> TestCommand(result.events.first().id) }
+            build()
+        }
+
+        val input = TestCommand(UUID.randomUUID())
+        val result = runBlocking { useCase.execute(input) }
+
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(3, (result as Either.Right<WorkflowResult>).value.events.size)
     }
 
-    val input = TestCommand(UUID.randomUUID())
-    val result = runBlocking { useCase.execute(input) }
+    @Test
+    fun `should complete workflow chain within reasonable time`() {
+        val workflow = TestWorkflow("A")
+        val useCase = useCase(workflow) { build() }
 
-    result.shouldBeInstanceOf<Either.Right<WorkflowResult>>()
-    (result).value.events.size shouldBe 3
-  }
+        val startTime = System.currentTimeMillis()
+        val result = runBlocking { useCase.execute(TestCommand(UUID.randomUUID())) }
+        val duration = System.currentTimeMillis() - startTime
 
-  "should complete workflow chain within reasonable time" {
-    val workflow = TestWorkflow("A")
-    val useCase = useCase(workflow) { build() }
+        assertTrue(duration < 1000L) // Adjust threshold as needed
+    }
 
-    val startTime = System.currentTimeMillis()
-    val result = runBlocking { useCase.execute(TestCommand(UUID.randomUUID())) }
-    val duration = System.currentTimeMillis() - startTime
+    @Test
+    fun `should execute workflows in parallel using parallel block`() {
+        val initialWorkflow = TestWorkflow("A")
+        val secondWorkflow = DelayedWorkflow("B")
+        val thirdWorkflow = DelayedWorkflow("C")
 
-    duration.shouldBeLessThan(1000) // Adjust threshold as needed
-  }
+        val useCase = useCase(initialWorkflow) {
+            parallel {
+                then(secondWorkflow) { result -> TestCommand(result.events.first().id) }
+                then(thirdWorkflow) { result -> TestCommand(result.events.first().id) }
+            }
+            build()
+        }
 
-})
+        val input = TestCommand(UUID.randomUUID())
+
+        val startTime = System.currentTimeMillis()
+        val result = runBlocking { useCase.execute(input) }
+        val endTime = System.currentTimeMillis()
+
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(3, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(3, executions.size)
+
+        // Check if the workflows were executed in parallel (total time should be less than the sum of individual delays)
+        assertTrue(endTime - startTime < 3000L)
+    }
+
+    @Test
+    fun `should execute workflows in mixed parallel and sequential order`() {
+        val initialWorkflow = TestWorkflow("A")
+        val secondWorkflow = DelayedWorkflow("B")
+        val thirdWorkflow = DelayedWorkflow("C")
+        val fourthWorkflow = TestWorkflow("D")
+
+        val useCase = useCase(initialWorkflow) {
+            parallel {
+                then(secondWorkflow) { result -> TestCommand(result.events.first().id) }
+                then(thirdWorkflow) { result -> TestCommand(result.events.first().id) }
+            }
+            then(fourthWorkflow) { result -> TestCommand(result.events.first().id) }
+            build()
+        }
+
+        val input = TestCommand(UUID.randomUUID())
+
+        val startTime = System.currentTimeMillis()
+        val result = runBlocking { useCase.execute(input) }
+        val endTime = System.currentTimeMillis()
+
+        assertTrue(result is Either.Right<WorkflowResult>)
+        assertEquals(4, (result as Either.Right<WorkflowResult>).value.events.size)
+        val executions = result.value.context.executions
+        assertEquals(4, executions.size)
+
+        // Check if the parallel workflows were executed concurrently
+        assertTrue(endTime - startTime < 3000L)
+    }
+
+    @Test
+    fun `should handle errors in parallel block`() {
+        val initialWorkflow = TestWorkflow("A")
+        val secondWorkflow = DelayedWorkflow("B")
+        val failingWorkflow = FailingWorkflow("C")
+
+        val useCase = useCase(initialWorkflow) {
+            parallel {
+                then(secondWorkflow) { result -> TestCommand(result.events.first().id) }
+                then(failingWorkflow) { result -> TestCommand(result.events.first().id) }
+            }
+            build()
+        }
+
+        val input = TestCommand(UUID.randomUUID())
+        val result = runBlocking { useCase.execute(input) }
+
+        assertTrue(result.isLeft())
+        result.fold(
+            { assertTrue(it is ExecutionError) },
+            { fail("Expected Left with ExecutionError but got Right: $it") }
+        )
+    }
+}
 
 class TestCommand(val id: UUID) : Command
 
@@ -347,7 +448,7 @@ class TestWorkflowWithContextData(override val id: String) : Workflow<TestComman
     override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
         val updatedContext = WorkflowContext().addData("key1", "value1").addData("key2", "value2")
         val event = TestEvent(input.id, Instant.now())
-        return Either.Right(WorkflowResult(listOf(event), updatedContext, ))
+        return Either.Right(WorkflowResult(listOf(event), updatedContext))
     }
 }
 

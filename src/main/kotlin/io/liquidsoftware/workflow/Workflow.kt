@@ -15,11 +15,12 @@ abstract class Workflow<I : Input, E: Event> {
     suspend fun execute(input: I): Either<WorkflowError, WorkflowResult> {
         val startTime = Instant.now()
         val result = either {
-            try {
-                executeWorkflow(input).bind()
-            } catch (ex: Exception) {
-                raise(ExceptionError("An exception occurred", ex))
-            }
+          // Either.catch handles CancellationException properly
+          Either.catch {
+              executeWorkflow(input).bind()
+          }.mapLeft { ex ->
+            raise(ExceptionError("An exception occurred", ex))
+          }.bind()
         }
         val endTime = Instant.now()
 

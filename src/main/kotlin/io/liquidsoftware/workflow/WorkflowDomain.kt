@@ -53,9 +53,8 @@ data class WorkflowContext(
         return copy(data = newData)
     }
 
-    fun getData(key: String): Any? {
-        return data[key]
-    }
+    inline fun <reified T> getTypedData(key: String, default: T? = null): T? =
+      data[key] as T? ?: default
 
     fun combine(other: WorkflowContext): WorkflowContext {
         val combinedData = data + other.data
