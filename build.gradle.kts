@@ -1,10 +1,10 @@
 plugins {
-    kotlin("jvm") version "2.0.21"
-    kotlin("plugin.serialization") version "2.0.21"
-    id("com.github.ben-manes.versions") version "0.52.0"
+  kotlin("jvm") version "2.1.20"
+  kotlin("plugin.serialization") version "2.1.20"
+  id("com.github.ben-manes.versions") version "0.52.0"
 }
 
-group = "com.toasttab"
+group = "com.liquidsoftware"
 version = "1.0-SNAPSHOT"
 
 repositories {
@@ -15,8 +15,8 @@ val arrowVersion = "2.0.1"
 
 dependencies {
     // Kotlin Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.0")
-    implementation("org.jetbrains.kotlin:kotlin-reflect:1.8.10")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
+    implementation("org.jetbrains.kotlin:kotlin-reflect:2.1.20")
 
     implementation(platform("io.arrow-kt:arrow-stack:$arrowVersion"))
     implementation("io.arrow-kt:arrow-core")
@@ -25,11 +25,9 @@ dependencies {
 
     // Testing
     testImplementation(kotlin("test"))
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
     testImplementation("io.kotest:kotest-runner-junit5:5.8.0")
     testImplementation("io.kotest:kotest-assertions-core:5.8.0")
     testImplementation("io.kotest:kotest-framework-engine:5.8.0")
-    testImplementation("io.kotest:kotest-assertions-core:5.8.0")
 }
 
 tasks.test {
@@ -37,5 +35,5 @@ tasks.test {
 }
 
 kotlin {
-    jvmToolchain(22)
+    jvmToolchain(23)
 }
