@@ -400,6 +400,32 @@ class WorkflowChainTest {
   }
 
   @Test
+  fun `should propagate failure from intermediate workflow`() {
+    val workflowA = TestWorkflow("A")
+    val failingWorkflow = FailingWorkflow("B")
+    val workflowC = TestWorkflow("C")
+
+    val useCase: UseCase<TestUseCaseCommand> = useCase {
+      first(
+        workflow = workflowA,
+        inputMapper = { ucc -> TestCommand(ucc.id) }
+      )
+      then(failingWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      then(workflowC) { result, ucc -> TestCommand(result.events.first().id) }
+      build()
+    }
+
+    val input = TestUseCaseCommand(UUID.randomUUID())
+    val result = runBlocking { useCase.execute(input) }
+
+    assertTrue(result.isLeft())
+    result.fold(
+      { assertTrue(it is ExecutionError) },
+      { fail("Expected Left with ExecutionError but got Right: $it") }
+    )
+  }
+
+  @Test
   fun `should execute workflows in parallel using parallel block`() {
     val initialWorkflow = TestWorkflow("A")
     val secondWorkflow = DelayedWorkflow("B")

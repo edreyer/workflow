@@ -192,12 +192,11 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
         var currentResult: Either<WorkflowError, WorkflowResult> = result.right()
         for (workflow in workflows) {
           if (currentResult.isRight()) {
-            val result = (currentResult as Either.Right).value
-            val nextResult = workflow.step(result, result.context, command)
-            currentResult = nextResult.fold(
-              { currentResult },
-              { workflowResult -> workflowResult.combine(result).right() }
-            )
+            val prevResult = (currentResult as Either.Right).value
+            val nextResult = workflow.step(prevResult, prevResult.context, command)
+            currentResult = nextResult.map { workflowResult ->
+              workflowResult.combine(prevResult)
+            }
           } else {
             break
           }
