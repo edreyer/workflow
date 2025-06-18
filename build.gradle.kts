@@ -11,7 +11,7 @@ repositories {
     mavenCentral()
 }
 
-val arrowVersion = "2.0.1"
+val arrowVersion = "2.1.0"
 
 dependencies {
     // Kotlin Coroutines
@@ -37,3 +37,4 @@ tasks.test {
 kotlin {
     jvmToolchain(23)
 }
+

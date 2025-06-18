@@ -44,16 +44,13 @@ fun main() {
 
     // After validation, run inventory check and payment processing in parallel
     parallel {
-      then(CheckInventoryWorkflow("check-inventory")) { result, ucc ->
-        // Access the validated event from the previous workflow's result
-        val validatedEvent = result.events.filterIsInstance<OrderValidatedEvent>().first()
-        CheckInventoryCommand(validatedEvent.orderId, validatedEvent.items)
-      }
+      // Use auto-mapping - fields match directly
+      then(CheckInventoryWorkflow("check-inventory"))
 
-      then(ProcessPaymentWorkflow("process-payment")) { result, ucc ->
-        // Access the validated event from the previous workflow's result
-        val validatedEvent = result.events.filterIsInstance<OrderValidatedEvent>().first()
-        ProcessPaymentCommand(validatedEvent.orderId, customerId, totalAmount)
+      // Use auto-mapping with property mapping
+      then(ProcessPaymentWorkflow("process-payment")) {
+        "orderId" from "orderId"  // This would be automatic, but including for clarity
+        "amount" from "totalAmount" // Map from command's totalAmount to amount in ProcessPaymentCommand
       }
     }
 
@@ -68,16 +65,10 @@ fun main() {
         // Check previous events to determine if we should proceed
         result.context.getTypedData<Boolean>("inventoryAvailable") == true && paymentSuccessful
       }
-    ) { result, ucc ->
-      // Transform previous events into the shipment command
-      val validatedEvent = result.events.filterIsInstance<OrderValidatedEvent>().first()
-      val inventoryEvent = result.events.filterIsInstance<InventoryVerifiedEvent>().first()
-
-      PrepareShipmentCommand(
-        orderId = validatedEvent.orderId,
-        shippingAddress = validatedEvent.shippingAddress,
-        items = inventoryEvent.availableItems // Use verified inventory items
-      )
+    ) {
+      // Map from different event fields to the shipment command fields
+      "items" from "availableItems" // from InventoryVerifiedEvent
+      // Other fields will be automatically mapped
     }
   }
 

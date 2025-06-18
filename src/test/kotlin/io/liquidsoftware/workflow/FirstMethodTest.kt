@@ -35,11 +35,11 @@ class FirstMethodTest {
             val useCase = useCase<TestCommand> {
                 // No first() call
             }
-            
+
             // Trigger the build() method which checks if first() was called
             runBlocking { useCase.execute(TestCommand(UUID.randomUUID())) }
         }
-        
+
         assert(exception.message?.contains("first() method must be called") == true)
     }
 
@@ -48,17 +48,15 @@ class FirstMethodTest {
         // Should throw an exception when first() is not the first method called
         val exception = assertThrows<IllegalStateException> {
             useCase<TestCommand> {
-                then(TestWorkflow("test")) { result, command ->
-                    TestWorkflowInput(command.id)
-                }
-                
+                this.then(TestWorkflow("test"))
+
                 first(
                     workflow = TestWorkflow("test"),
                     inputMapper = { command -> TestWorkflowInput(command.id) }
                 )
             }
         }
-        
+
         assert(exception.message?.contains("first() method must be the first method called") == true)
     }
 
@@ -71,14 +69,14 @@ class FirstMethodTest {
                     workflow = TestWorkflow("test1"),
                     inputMapper = { command -> TestWorkflowInput(command.id) }
                 )
-                
+
                 first(
                     workflow = TestWorkflow("test2"),
                     inputMapper = { command -> TestWorkflowInput(command.id) }
                 )
             }
         }
-        
+
         assert(exception.message?.contains("first() method can only be called once") == true)
     }
 
@@ -90,12 +88,10 @@ class FirstMethodTest {
                 workflow = TestWorkflow("test"),
                 inputMapper = { command -> TestWorkflowInput(command.id) }
             )
-            
-            then(TestWorkflow("next")) { result, command ->
-                TestWorkflowInput(command.id)
-            }
+
+          this.then(TestWorkflow("next"))
         }
-        
+
         // Execute the use case to ensure it works
         val result = runBlocking { useCase.execute(TestCommand(UUID.randomUUID())) }
         assert(result.isRight())

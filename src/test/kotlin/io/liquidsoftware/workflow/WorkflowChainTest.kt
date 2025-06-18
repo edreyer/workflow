@@ -21,7 +21,7 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(nextWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -48,7 +48,7 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(nextWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -72,7 +72,7 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(nextWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -92,14 +92,12 @@ class WorkflowChainTest {
   @Test
   fun `should not execute next workflow if inputMapper throws`() {
     val initialWorkflow = ThrowingWorkflow("T")
-    val nextWorkflow = TestWorkflow("A")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(nextWorkflow) { result, ucc -> throw RuntimeException("Error") }
       build()
     }
 
@@ -126,9 +124,7 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      thenIf(nextWorkflow, { _ -> true }) { result, ucc ->
-        TestCommand(result.events.first().id)
-      }
+      thenIf(nextWorkflow, { _ -> true })
       build()
     }
 
@@ -151,9 +147,7 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      thenIf(nextWorkflow, { _ -> false }) { result, ucc ->
-        TestCommand(result.events.first().id)
-      }
+      thenIf(nextWorkflow, { _ -> false })
       build()
     }
 
@@ -194,8 +188,8 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(secondWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
-      then(thirdWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(secondWorkflow, mapOf("id" to "id"))
+      this.then(thirdWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -218,7 +212,7 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(nextWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -243,7 +237,7 @@ class WorkflowChainTest {
         workflow = initialWorkflow,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(nextWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -268,7 +262,7 @@ class WorkflowChainTest {
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
       parallel {
-        then(nextWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+        this.then(nextWorkflow)
       }
       build()
     }
@@ -300,8 +294,8 @@ class WorkflowChainTest {
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
       parallel {
-        then(secondWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
-        then(thirdWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+        this.then(secondWorkflow)
+        this.then(thirdWorkflow)
       }
       build()
     }
@@ -335,11 +329,11 @@ class WorkflowChainTest {
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
       parallel {
-        then(secondWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
-        then(thirdWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+        this.then(secondWorkflow)
+        this.then(thirdWorkflow)
       }
-      then(fourthWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
-      then(fifthWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(fourthWorkflow, mapOf("id" to "id"))
+      this.then(fifthWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -369,8 +363,8 @@ class WorkflowChainTest {
         workflow = workflowA,
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
-      then(workflowB) { result, ucc -> TestCommand(result.events.first().id) }
-      then(workflowC) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(workflowB, mapOf("id" to "id"))
+      this.then(workflowC, mapOf("id" to "id"))
       build()
     }
 
@@ -411,8 +405,8 @@ class WorkflowChainTest {
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
       parallel {
-        then(secondWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
-        then(thirdWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+        this.then(secondWorkflow)
+        this.then(thirdWorkflow)
       }
       build()
     }
@@ -445,10 +439,10 @@ class WorkflowChainTest {
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
       parallel {
-        then(secondWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
-        then(thirdWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+        this.then(secondWorkflow)
+        this.then(thirdWorkflow)
       }
-      then(fourthWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+      this.then(fourthWorkflow, mapOf("id" to "id"))
       build()
     }
 
@@ -479,8 +473,8 @@ class WorkflowChainTest {
         inputMapper = { ucc -> TestCommand(ucc.id) }
       )
       parallel {
-        then(secondWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
-        then(failingWorkflow) { result, ucc -> TestCommand(result.events.first().id) }
+        this.then(secondWorkflow)
+        this.then(failingWorkflow)
       }
       build()
     }
