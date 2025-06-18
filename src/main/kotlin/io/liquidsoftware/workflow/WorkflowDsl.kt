@@ -99,9 +99,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     workflow: Workflow<WFI, E>,
     block: PropertyMappingBuilder.() -> Unit
   ) {
-    val builder = PropertyMappingBuilder()
-    builder.block()
-    first(workflow, builder.build())
+    first(workflow, buildPropertyMap(block))
   }
 
   /**
@@ -164,9 +162,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     block: PropertyMappingBuilder.() -> Unit
   ) {
     otherMethodCalled = true
-    val builder = PropertyMappingBuilder()
-    builder.block()
-    currentBuilder.then(workflow, builder.build())
+    currentBuilder.then(workflow, buildPropertyMap(block))
   }
 
   /**
@@ -203,9 +199,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     block: PropertyMappingBuilder.() -> Unit
   ) {
     otherMethodCalled = true
-    val builder = PropertyMappingBuilder()
-    builder.block()
-    currentBuilder.thenIf(workflow, predicate, builder.build())
+    currentBuilder.thenIf(workflow, predicate, buildPropertyMap(block))
   }
 
   /**
@@ -406,6 +400,35 @@ internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : Workf
     propertyMap: Map<String, String> = emptyMap()
   )
 
+  /**
+   * Creates a workflow step that auto-maps input and executes the workflow
+   */
+  protected fun <C : WorkflowInput, R : Event> createWorkflowStep(
+    workflow: Workflow<C, R>,
+    propertyMap: Map<String, String>,
+    predicate: ((WorkflowResult) -> Boolean)? = null,
+    withCoroutineScope: Boolean = false
+  ): WorkflowStep<UCC, I, E> {
+    return WorkflowStep { result, context, command ->
+      val executeStep: suspend () -> Either<WorkflowError, WorkflowResult> = {
+        if (predicate == null || predicate(result)) {
+          val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
+            ?: throw IllegalArgumentException("Cannot determine input type for workflow")
+          result.autoMapInputAndExecuteNext(workflow, command, propertyMap, clazz)
+        } else {
+          // Return the original result when predicate is false
+          result.right()
+        }
+      }
+
+      if (withCoroutineScope) {
+        coroutineScope { executeStep() }
+      } else {
+        executeStep()
+      }
+    }
+  }
+
   abstract fun build(): BuiltWorkflow<UCC, I, E>
 }
 
@@ -416,11 +439,7 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
     workflow: Workflow<C, R>,
     propertyMap: Map<String, String>
   ) {
-    workflows.add(WorkflowStep { result, context, command ->
-      val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
-        ?: throw IllegalArgumentException("Cannot determine input type for workflow")
-      result.autoMapInputAndExecuteNext(workflow, command, propertyMap, clazz)
-    })
+    workflows.add(createWorkflowStep(workflow, propertyMap))
   }
 
   override fun <C : WorkflowInput, R : Event> thenIf(
@@ -428,15 +447,7 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
     predicate: (WorkflowResult) -> Boolean,
     propertyMap: Map<String, String>
   ) {
-    workflows.add(WorkflowStep { result, context, command ->
-      if (predicate(result)) {
-        val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
-          ?: throw IllegalArgumentException("Cannot determine input type for workflow")
-        result.autoMapInputAndExecuteNext(workflow, command, propertyMap, clazz)
-      } else {
-        Either.Right(WorkflowResult())
-      }
-    })
+    workflows.add(createWorkflowStep(workflow, propertyMap, predicate))
   }
 
   override fun build(): BuiltWorkflow<UCC, I, E> {
@@ -449,7 +460,15 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
             val nextResult = workflow.step(result, result.context, command)
             currentResult = nextResult.fold(
               { currentResult },
-              { workflowResult -> workflowResult.combine(result).right() }
+              { workflowResult ->
+                // If the returned result is the same as the original result (reference equality),
+                // it means the workflow step didn't execute (predicate was false)
+                if (workflowResult === result) {
+                  workflowResult.right()
+                } else {
+                  workflowResult.combine(result).right()
+                }
+              }
             )
           } else {
             break
@@ -469,13 +488,7 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
     workflow: Workflow<C, R>,
     propertyMap: Map<String, String>
   ) {
-    workflows.add(WorkflowStep { result, context, command ->
-      coroutineScope {
-        val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
-          ?: throw IllegalArgumentException("Cannot determine input type for workflow")
-        result.autoMapInputAndExecuteNext(workflow, command, propertyMap, clazz)
-      }
-    })
+    workflows.add(createWorkflowStep(workflow, propertyMap, withCoroutineScope = true))
   }
 
   override fun <C : WorkflowInput, R : Event> thenIf(
@@ -483,17 +496,7 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
     predicate: (WorkflowResult) -> Boolean,
     propertyMap: Map<String, String>
   ) {
-    workflows.add(WorkflowStep { result, context, command ->
-      coroutineScope {
-        if (predicate(result)) {
-          val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
-            ?: throw IllegalArgumentException("Cannot determine input type for workflow")
-          result.autoMapInputAndExecuteNext(workflow, command, propertyMap, clazz)
-        } else {
-          WorkflowResult(emptyList(), context).right()
-        }
-      }
-    })
+    workflows.add(createWorkflowStep(workflow, propertyMap, predicate, withCoroutineScope = true))
   }
 
   override fun build(): BuiltWorkflow<UCC, I, E> {
@@ -561,6 +564,18 @@ class PropertyMappingBuilder {
 }
 
 /**
+ * Utility function to build a property mapping from a configuration block
+ *
+ * @param block The property mapping configuration block
+ * @return A map of target property names to source property names
+ */
+private fun buildPropertyMap(block: PropertyMappingBuilder.() -> Unit): Map<String, String> {
+  val builder = PropertyMappingBuilder()
+  builder.block()
+  return builder.build()
+}
+
+/**
  * Configuration block for parallel workflow execution
  *
  * This class provides a DSL for configuring workflows to be executed in parallel.
@@ -592,9 +607,7 @@ class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal
     workflow: Workflow<C, R>,
     block: PropertyMappingBuilder.() -> Unit
   ) {
-    val mappingBuilder = PropertyMappingBuilder()
-    mappingBuilder.block()
-    builder.then(workflow, mappingBuilder.build())
+    builder.then(workflow, buildPropertyMap(block))
   }
 
   /**
@@ -628,9 +641,7 @@ class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal
     predicate: (WorkflowResult) -> Boolean,
     block: PropertyMappingBuilder.() -> Unit
   ) {
-    val mappingBuilder = PropertyMappingBuilder()
-    mappingBuilder.block()
-    builder.thenIf(workflow, predicate, mappingBuilder.build())
+    builder.thenIf(workflow, predicate, buildPropertyMap(block))
   }
 
   /**
