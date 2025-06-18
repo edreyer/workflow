@@ -12,16 +12,74 @@ import kotlin.test.assertTrue
 class AutoMappingExampleTest {
 
   @Test
+  fun `should demonstrate auto-mapping with first method using property map`() = runBlocking {
+    // Given
+    val initialCommand = RegisterCustomerCommand("test@example.com", "John Doe")
+
+    val useCase = useCase<RegisterCustomerCommand> {
+      // Auto-mapping for first workflow with property map
+      first(validateCustomerWorkflow, mapOf(
+        "email" to "email",
+        "name" to "name"
+      ))
+
+      // Auto-mapping - fields match directly with ValidatedCustomerEvent
+      this.then(createCustomerWorkflow)
+    }
+
+    // When
+    val result = useCase.execute(initialCommand)
+
+    // Then
+    assertTrue(result.isRight())
+    val events = (result as Either.Right).value.events
+    assertEquals(2, events.size)
+    assertTrue(events.any { it is ValidatedCustomerEvent })
+    assertTrue(events.any { it is CustomerCreatedEvent })
+  }
+
+  @Test
+  fun `should demonstrate auto-mapping with first method using builder pattern`() = runBlocking {
+    // Given
+    val initialCommand = RegisterCustomerCommand("test@example.com", "John Doe")
+
+    val useCase = useCase<RegisterCustomerCommand> {
+      // Auto-mapping for first workflow with builder pattern
+      first(validateCustomerWorkflow) {
+        "email" from "email"
+        "name" from "name"
+      }
+
+      // Auto-mapping with property name mapping
+      this.then(sendWelcomeEmailWorkflow, mapOf(
+        "recipientEmail" to "email",
+        "recipientName" to "name"
+      ))
+    }
+
+    // When
+    val result = useCase.execute(initialCommand)
+
+    // Then
+    assertTrue(result.isRight())
+    val events = (result as Either.Right).value.events
+    assertEquals(2, events.size)
+    assertTrue(events.any { it is ValidatedCustomerEvent })
+    assertTrue(events.any { it is WelcomeEmailSentEvent })
+  }
+
+  @Test
   fun `should demonstrate auto-mapping between workflows`() = runBlocking {
     // Given
     val customerId = UUID.randomUUID()
     val initialCommand = RegisterCustomerCommand("test@example.com", "John Doe")
 
     val useCase = useCase<RegisterCustomerCommand> {
-      // Standard mapping for first workflow (required)
-      first(validateCustomerWorkflow) { command ->
-        ValidateCustomerInput(command.email, command.name)
-      }
+      // Auto-mapping for first workflow with property map
+      first(validateCustomerWorkflow, mapOf(
+        "email" to "email",
+        "name" to "name"
+      ))
 
       // Auto-mapping - fields match directly with ValidatedCustomerEvent
       this.then(createCustomerWorkflow)

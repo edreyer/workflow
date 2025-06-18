@@ -30,13 +30,13 @@ class FirstMethodTest {
 
     @Test
     fun `first() must be called at least once`() {
-        // Should throw an exception when first() is not called
+        // Should throw an exception when firstWithAutoMapping() is not called
         val exception = assertThrows<IllegalStateException> {
             val useCase = useCase<TestCommand> {
-                // No first() call
+                // No firstWithAutoMapping() call
             }
 
-            // Trigger the build() method which checks if first() was called
+            // Trigger the build() method which checks if firstWithAutoMapping() was called
             runBlocking { useCase.execute(TestCommand(UUID.randomUUID())) }
         }
 
@@ -45,15 +45,12 @@ class FirstMethodTest {
 
     @Test
     fun `first() must be the first method called`() {
-        // Should throw an exception when first() is not the first method called
+        // Should throw an exception when firstWithAutoMapping() is not the first method called
         val exception = assertThrows<IllegalStateException> {
             useCase<TestCommand> {
                 this.then(TestWorkflow("test"))
 
-                first(
-                    workflow = TestWorkflow("test"),
-                    inputMapper = { command -> TestWorkflowInput(command.id) }
-                )
+                first(workflow = TestWorkflow("test"))
             }
         }
 
@@ -62,18 +59,11 @@ class FirstMethodTest {
 
     @Test
     fun `first() cannot be called more than once`() {
-        // Should throw an exception when first() is called more than once
+        // Should throw an exception when firstWithAutoMapping() is called more than once
         val exception = assertThrows<IllegalStateException> {
             useCase<TestCommand> {
-                first(
-                    workflow = TestWorkflow("test1"),
-                    inputMapper = { command -> TestWorkflowInput(command.id) }
-                )
-
-                first(
-                    workflow = TestWorkflow("test2"),
-                    inputMapper = { command -> TestWorkflowInput(command.id) }
-                )
+                first(workflow = TestWorkflow("test1"))
+                first(workflow = TestWorkflow("test2"))
             }
         }
 
@@ -82,12 +72,9 @@ class FirstMethodTest {
 
     @Test
     fun `valid usage of first() method`() {
-        // Should not throw an exception when first() is used correctly
+        // Should not throw an exception when firstWithAutoMapping() is used correctly
         val useCase = useCase<TestCommand> {
-            first(
-                workflow = TestWorkflow("test"),
-                inputMapper = { command -> TestWorkflowInput(command.id) }
-            )
+            first(workflow = TestWorkflow("test"))
 
           this.then(TestWorkflow("next"))
         }

@@ -36,10 +36,7 @@ fun main() {
   val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
 
     first(
-      workflow = ValidateOrderWorkflow("validate-order"),
-      inputMapper = { input -> with(input) {
-        ValidateOrderCommand(orderId, customerId, items, totalAmount)
-      } }
+      workflow = ValidateOrderWorkflow("validate-order")
     )
 
     // After validation, run inventory check and payment processing in parallel

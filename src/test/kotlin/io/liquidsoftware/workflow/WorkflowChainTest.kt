@@ -17,10 +17,7 @@ class WorkflowChainTest {
     val nextWorkflow = TestWorkflow("B")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
@@ -44,10 +41,7 @@ class WorkflowChainTest {
     val nextWorkflow = TestWorkflow("A")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
@@ -68,10 +62,7 @@ class WorkflowChainTest {
     val nextWorkflow = TestWorkflow("A")
 
     val useCase: UseCase<io.liquidsoftware.workflow.TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
@@ -94,10 +85,7 @@ class WorkflowChainTest {
     val initialWorkflow = ThrowingWorkflow("T")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       build()
     }
 
@@ -120,10 +108,7 @@ class WorkflowChainTest {
     val nextWorkflow = TestWorkflow("B")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       thenIf(nextWorkflow, { _ -> true })
       build()
     }
@@ -143,10 +128,7 @@ class WorkflowChainTest {
     val nextWorkflow = TestWorkflow("B")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       thenIf(nextWorkflow, { _ -> false })
       build()
     }
@@ -164,10 +146,7 @@ class WorkflowChainTest {
   fun `should return initial context and no events for empty workflow chain`() {
     val initialWorkflow = TestWorkflow("A")
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       build()
     }
     val input = TestUseCaseCommand(UUID.randomUUID())
@@ -184,10 +163,7 @@ class WorkflowChainTest {
     val thirdWorkflow = TestWorkflow("C")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       this.then(secondWorkflow, mapOf("id" to "id"))
       this.then(thirdWorkflow, mapOf("id" to "id"))
       build()
@@ -208,10 +184,7 @@ class WorkflowChainTest {
     val nextWorkflow = TestWorkflowWithContextData("B")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
@@ -233,10 +206,7 @@ class WorkflowChainTest {
     val nextWorkflow = TestWorkflow("B")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       this.then(nextWorkflow, mapOf("id" to "id"))
       build()
     }
@@ -257,10 +227,7 @@ class WorkflowChainTest {
     val nextWorkflow = DelayedWorkflow("B")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       parallel {
         this.then(nextWorkflow)
       }
@@ -289,10 +256,7 @@ class WorkflowChainTest {
     val thirdWorkflow = DelayedWorkflow("C")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       parallel {
         this.then(secondWorkflow)
         this.then(thirdWorkflow)
@@ -324,10 +288,7 @@ class WorkflowChainTest {
     val fifthWorkflow = TestWorkflow("E")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       parallel {
         this.then(secondWorkflow)
         this.then(thirdWorkflow)
@@ -359,10 +320,7 @@ class WorkflowChainTest {
     val workflowC = TestWorkflow("C")
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = workflowA,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = workflowA)
       this.then(workflowB, mapOf("id" to "id"))
       this.then(workflowC, mapOf("id" to "id"))
       build()
@@ -379,10 +337,7 @@ class WorkflowChainTest {
   fun `should complete workflow chain within reasonable time`() {
     val workflow = TestWorkflow("A")
     val testUseCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = workflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = workflow)
       build()
     }
 
@@ -400,10 +355,7 @@ class WorkflowChainTest {
     val thirdWorkflow = DelayedWorkflow("C")
 
     val testUseCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       parallel {
         this.then(secondWorkflow)
         this.then(thirdWorkflow)
@@ -434,10 +386,7 @@ class WorkflowChainTest {
     val fourthWorkflow = TestWorkflow("D")
 
     val testUseCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       parallel {
         this.then(secondWorkflow)
         this.then(thirdWorkflow)
@@ -468,10 +417,7 @@ class WorkflowChainTest {
     val failingWorkflow = FailingWorkflow("C")
 
     val testUseCase: UseCase<TestUseCaseCommand> = useCase {
-      first(
-        workflow = initialWorkflow,
-        inputMapper = { ucc -> TestCommand(ucc.id) }
-      )
+      first(workflow = initialWorkflow)
       parallel {
         this.then(secondWorkflow)
         this.then(failingWorkflow)

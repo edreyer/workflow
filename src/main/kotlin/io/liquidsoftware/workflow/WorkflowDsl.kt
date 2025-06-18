@@ -26,6 +26,7 @@ fun <UCC : UseCaseCommand> useCase(
 class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
   private var initialWorkflow: Workflow<WorkflowInput, Event>? = null
   private var initialWorkflowMapper: ((UCC) -> WorkflowInput)? = null
+  private var initialPropertyMap: Map<String, String> = emptyMap()
   private var firstCalled = false
   private var otherMethodCalled = false
   private var _command: UCC? = null
@@ -41,9 +42,10 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     builders.add(currentBuilder)
   }
 
+
   fun <WFI : WorkflowInput, E : Event> first(
     workflow: Workflow<WFI, E>,
-    inputMapper: (UCC) -> WFI
+    propertyMap: Map<String, String> = emptyMap()
   ) {
     if (firstCalled) {
       throw IllegalStateException("first() method can only be called once")
@@ -53,9 +55,18 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     }
     @Suppress("UNCHECKED_CAST")
     initialWorkflow = workflow as Workflow<WorkflowInput, Event>
-    @Suppress("UNCHECKED_CAST")
-    initialWorkflowMapper = inputMapper as (UCC) -> WorkflowInput
+    initialPropertyMap = propertyMap
+    initialWorkflowMapper = null
     firstCalled = true
+  }
+
+  fun <WFI : WorkflowInput, E : Event> first(
+    workflow: Workflow<WFI, E>,
+    block: PropertyMappingBuilder.() -> Unit
+  ) {
+    val builder = PropertyMappingBuilder()
+    builder.block()
+    first(workflow, builder.build())
   }
 
   fun parallel(block: ParallelBlock<UCC, WorkflowInput, Event>.() -> Unit) {
@@ -134,9 +145,25 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
       override suspend fun execute(ucCommand: UCC): Either<WorkflowError, WorkflowResult> = either {
         that._command = ucCommand
         val workflow = that.initialWorkflow ?: raise(CompositionError("Initial workflow not set", IllegalStateException("Initial workflow not set")))
-        val mapper = that.initialWorkflowMapper ?: raise(CompositionError("Initial workflow mapper not set", IllegalStateException("Initial workflow mapper not set")))
 
-        val initialWorkflowInput = mapper(ucCommand)
+        // Create an empty initial result for auto-mapping
+        val emptyResult = WorkflowResult()
+
+        val initialWorkflowInput = if (that.initialWorkflowMapper != null) {
+          // Use explicit mapper if provided
+          that.initialWorkflowMapper!!(ucCommand)
+        } else {
+          // Use auto-mapping
+          // Determine the input type for the initial workflow
+          @Suppress("UNCHECKED_CAST")
+          val inputClass = workflow.javaClass.kotlin.supertypes[0].arguments[0].type?.classifier as? KClass<WorkflowInput>
+            ?: raise(CompositionError("Cannot determine input type for initial workflow", IllegalArgumentException("Cannot determine input type")))
+
+          // Use BaseWorkflowChainBuilder.autoMapInput (now internal)
+          currentBuilder.autoMapInput(emptyResult, ucCommand, that.initialPropertyMap, inputClass)
+            ?: raise(CompositionError("Cannot auto-map to ${inputClass.simpleName}", AutoMappingException("Cannot auto-map to ${inputClass.simpleName}")))
+        }
+
         val initialResult = workflow.execute(initialWorkflowInput)
 
         return initialResult
@@ -188,7 +215,7 @@ internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : Workf
     .mapLeft { ex -> CompositionError("Error mapping input: ${ex.message ?: "Unknown error"}", ex) }
     .flatMap { input -> workflow.execute(input) }
 
-  protected fun <T : WorkflowInput> autoMapInput(
+  internal fun <T : WorkflowInput> autoMapInput(
     result: WorkflowResult,
     command: UseCaseCommand,
     propertyMap: Map<String, String> = emptyMap(),
