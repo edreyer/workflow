@@ -35,16 +35,11 @@ fun main() {
 
   val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
 
-    first(
-      workflow = ValidateOrderWorkflow("validate-order")
-    )
+    first(workflow = ValidateOrderWorkflow("validate-order"))
 
     // After validation, run inventory check and payment processing in parallel
     parallel {
-      // Use auto-mapping - fields match directly
       then(CheckInventoryWorkflow("check-inventory"))
-
-      // Use auto-mapping with property mapping
       then(ProcessPaymentWorkflow("process-payment")) {
         "orderId" from "orderId"  // This would be automatic, but including for clarity
         "amount" from "totalAmount" // Map from command's totalAmount to amount in ProcessPaymentCommand
@@ -58,14 +53,11 @@ fun main() {
           is SuccessfulPayment -> true
           else -> false
         }
-
-        // Check previous events to determine if we should proceed
         result.context.getTypedData<Boolean>("inventoryAvailable") == true && paymentSuccessful
       }
     ) {
       // Map from different event fields to the shipment command fields
       "items" from "availableItems" // from InventoryVerifiedEvent
-      // Other fields will be automatically mapped
     }
   }
 

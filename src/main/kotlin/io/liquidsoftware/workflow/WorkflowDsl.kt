@@ -331,7 +331,7 @@ object WorkflowUtils {
       }
     }
 
-    return constructor.callBy(args)
+    return constructor.runCatching { callBy(args) }.getOrNull()
   }
 
   /**
@@ -339,21 +339,16 @@ object WorkflowUtils {
    */
   private fun findInEvents(events: List<Event>, propertyName: String?, targetType: KClass<*>?): Any? {
     if (propertyName == null) return null
-    for (event in events) {
+
+    return events.firstNotNullOfOrNull { event ->
       val eventClass = event::class
       val property = eventClass.memberProperties.find { it.name == propertyName }
-      if (property != null) {
-        try {
-          val value = property.getter.call(event)
-          if (targetType == null || targetType.isInstance(value)) {
-            return value
-          }
-        } catch (e: Exception) {
-          // Ignore property access errors
-        }
+      property?.let {
+        runCatching { it.getter.call(event) }
+          .getOrNull()
+          ?.takeIf { value -> targetType == null || targetType.isInstance(value) }
       }
     }
-    return null
   }
 
   /**
@@ -363,11 +358,7 @@ object WorkflowUtils {
     if (propertyName == null) return null
     val commandClass = command::class
     val property = commandClass.memberProperties.find { it.name == propertyName }
-    return try {
-      property?.getter?.call(command)
-    } catch (e: Exception) {
-      null
-    }
+    return property?.getter?.runCatching { call(command) }?.getOrNull()
   }
 }
 
@@ -453,29 +444,27 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
   override fun build(): BuiltWorkflow<UCC, I, E> {
     return object : BuiltWorkflow<UCC, I, E>() {
       override suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult> {
-        var currentResult: Either<WorkflowError, WorkflowResult> = result.right()
-        for (workflow in workflows) {
-          if (currentResult.isRight()) {
-            val result = (currentResult as Either.Right).value
-            val nextResult = workflow.step(result, result.context, command)
-            currentResult = nextResult.fold(
-              { currentResult },
-              { workflowResult ->
-                // If the returned result is the same as the original result (reference equality),
-                // it means the workflow step didn't execute (predicate was false)
-                if (workflowResult === result) {
-                  workflowResult.right()
-                } else {
-                  workflowResult.combine(result).right()
+        return workflows.fold(result.right() as Either<WorkflowError, WorkflowResult>) { currentResult, workflow ->
+          when (currentResult) {
+            is Either.Right -> {
+              val resultValue = currentResult.value
+              val nextResult = workflow.step(resultValue, resultValue.context, command)
+              nextResult.fold(
+                { currentResult }, // Keep error from previous step
+                { workflowResult ->
+                  // If the returned result is the same as the original result (reference equality),
+                  // it means the workflow step didn't execute (predicate was false)
+                  if (workflowResult === resultValue) {
+                    workflowResult.right()
+                  } else {
+                    workflowResult.combine(resultValue).right()
+                  }
                 }
-              }
-            )
-          } else {
-            break
+              )
+            }
+            is Either.Left -> currentResult // Short-circuit on error
           }
         }
-
-        return currentResult
       }
     }
   }
