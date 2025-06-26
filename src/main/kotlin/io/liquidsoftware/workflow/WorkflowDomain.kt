@@ -23,14 +23,13 @@ sealed class WorkflowError {
 }
 
 data class WorkflowResult(
-  val events: List<Event> = emptyList<Event>(),
+  val events: List<Event> = emptyList(),
   val context: WorkflowContext = WorkflowContext()
 ) {
 
-  inline fun <reified T : Event, R> getFromEvent(property: KProperty1<T, R>): R? {
-    val event = events.filterIsInstance<T>().firstOrNull() ?: return null
-    return property.get(event)
-  }
+  inline fun <reified T : Event, R> getFromEvent(property: KProperty1<T, R>): R? =
+    events.filterIsInstance<T>().firstOrNull()
+      ?.let { event -> property.get(event) }
 
   fun combine(other: WorkflowResult): WorkflowResult {
     val combinedContext = this.context.combine(other.context)
