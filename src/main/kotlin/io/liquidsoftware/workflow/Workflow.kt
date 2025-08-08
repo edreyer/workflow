@@ -5,6 +5,14 @@ import arrow.core.raise.either
 import io.liquidsoftware.workflow.WorkflowError.ExceptionError
 import java.time.Instant
 
+/**
+ * Interceptor for workflow execution lifecycle events
+ */
+interface WorkflowInterceptor {
+  suspend fun preExecute(execution: WorkflowExecution, context: WorkflowContext)
+  suspend fun postExecute(execution: WorkflowExecution, context: WorkflowContext)
+}
+
 // Base Workflow interface
 abstract class Workflow<I : WorkflowInput, E : Event> {
 
@@ -12,8 +20,22 @@ abstract class Workflow<I : WorkflowInput, E : Event> {
 
   protected abstract suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult>
 
-  suspend fun execute(input: I): Either<WorkflowError, WorkflowResult> {
+  suspend fun execute(
+    input: I,
+    context: WorkflowContext = WorkflowContext(),
+    interceptors: List<WorkflowInterceptor> = emptyList()
+  ): Either<WorkflowError, WorkflowResult> {
     val startTime = Instant.now()
+    var execution = WorkflowExecution(
+      workflowName = this::class.simpleName ?: "UnknownWorkflow",
+      workflowId = id,
+      startTime = startTime,
+      endTime = startTime,
+      succeeded = false
+    )
+
+    interceptors.forEach { it.preExecute(execution, context) }
+
     val result = either {
       // Either.catch handles CancellationException properly
       Either.catch {
@@ -24,18 +46,14 @@ abstract class Workflow<I : WorkflowInput, E : Event> {
     }
     val endTime = Instant.now()
 
-    val execution = WorkflowExecution(
-      workflowName = this::class.simpleName ?: "UnknownWorkflow",
-      workflowId = id,
-      startTime = startTime,
-      endTime = endTime,
-      succeeded = result.isRight()
-    )
+    execution = execution.copy(endTime = endTime, succeeded = result.isRight())
 
     val updatedContext = result.fold(
-      { WorkflowContext().addExecution(execution) },
+      { context.addExecution(execution) },
       { wr -> wr.context.addExecution(execution) }
     )
+
+    interceptors.forEach { it.postExecute(execution, updatedContext) }
 
     return result.map { it.copy(context = updatedContext) }
   }

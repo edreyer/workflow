@@ -41,6 +41,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
   private var firstCalled = false
   private var otherMethodCalled = false
   private var _command: UCC? = null
+  private val interceptors = mutableListOf<WorkflowInterceptor>()
 
   /**
    * Access to the current command being processed
@@ -48,6 +49,10 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
    */
   val command: UCC
     get() = _command ?: throw IllegalStateException("Command not initialized")
+
+  fun interceptor(interceptor: WorkflowInterceptor) {
+    interceptors.add(interceptor)
+  }
 
   // Collection of workflow chain builders
   private val builders = mutableListOf<BaseWorkflowChainBuilder<UCC, WorkflowInput, Event>>()
@@ -253,7 +258,8 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
         }
 
         // Execute the initial workflow
-        val initialResult = workflow.execute(initialWorkflowInput)
+        val interceptors = that.interceptors
+        val initialResult = workflow.execute(initialWorkflowInput, interceptors = interceptors)
 
         // Execute the rest of the workflow chain
         return initialResult
@@ -262,7 +268,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
             either {
               builders.fold(result.right() as Either<WorkflowError, WorkflowResult>) { workflowResult, builder ->
                 val builtWorkflow = builder.build()
-                builtWorkflow.execute(initialWorkflowInput, workflowResult.bind(), ucCommand)
+                builtWorkflow.execute(initialWorkflowInput, workflowResult.bind(), ucCommand, interceptors)
               }.bind()
             }
           }
@@ -272,11 +278,21 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
 }
 
 internal abstract class BuiltWorkflow<UCC : UseCaseCommand, I : WorkflowInput, E : Event> {
-  abstract suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult>
+  abstract suspend fun execute(
+    input: I,
+    result: WorkflowResult,
+    command: UCC,
+    interceptors: List<WorkflowInterceptor>
+  ): Either<WorkflowError, WorkflowResult>
 }
 
 internal class WorkflowStep<UCC : UseCaseCommand, I : WorkflowInput, E : Event>(
-  val step: suspend (WorkflowResult, WorkflowContext, UCC) -> Either<WorkflowError, WorkflowResult>
+  val step: suspend (
+    WorkflowResult,
+    WorkflowContext,
+    UCC,
+    List<WorkflowInterceptor>
+  ) -> Either<WorkflowError, WorkflowResult>
 )
 
 /**
@@ -369,13 +385,14 @@ suspend fun <C : WorkflowInput, R : Event, UCC : UseCaseCommand> WorkflowResult.
   workflow: Workflow<C, R>,
   command: UCC,
   propertyMap: Map<String, String> = emptyMap(),
-  clazz: KClass<C>
+  clazz: KClass<C>,
+  interceptors: List<WorkflowInterceptor> = emptyList()
 ): Either<WorkflowError, WorkflowResult> = Either.catch {
   WorkflowUtils.autoMapInput(this, command, propertyMap, clazz)
     ?: throw AutoMappingException("Cannot auto-map to ${clazz.simpleName}")
 }
   .mapLeft { ex -> CompositionError("Error mapping input: ${ex.message ?: "Unknown error"}", ex) }
-  .flatMap { input -> workflow.execute(input) }
+  .flatMap { input -> workflow.execute(input, this.context, interceptors) }
 
 internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowInput, E : Event> {
   protected val workflows = mutableListOf<WorkflowStep<UCC, I, E>>()
@@ -400,12 +417,18 @@ internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : Workf
     predicate: ((WorkflowResult) -> Boolean)? = null,
     withCoroutineScope: Boolean = false
   ): WorkflowStep<UCC, I, E> {
-    return WorkflowStep { result, context, command ->
+    return WorkflowStep { result, context, command, interceptors ->
       val executeStep: suspend () -> Either<WorkflowError, WorkflowResult> = {
         if (predicate == null || predicate(result)) {
           val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
             ?: throw IllegalArgumentException("Cannot determine input type for workflow")
-          result.autoMapInputAndExecuteNext(workflow, command, propertyMap, clazz)
+          result.autoMapInputAndExecuteNext(
+            workflow,
+            command,
+            propertyMap,
+            clazz,
+            interceptors
+          )
         } else {
           // Return the original result when predicate is false
           result.right()
@@ -443,12 +466,17 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
 
   override fun build(): BuiltWorkflow<UCC, I, E> {
     return object : BuiltWorkflow<UCC, I, E>() {
-      override suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult> {
+      override suspend fun execute(
+        input: I,
+        result: WorkflowResult,
+        command: UCC,
+        interceptors: List<WorkflowInterceptor>
+      ): Either<WorkflowError, WorkflowResult> {
         return workflows.fold(result.right() as Either<WorkflowError, WorkflowResult>) { currentResult, workflow ->
           when (currentResult) {
             is Either.Right -> {
               val resultValue = currentResult.value
-              val nextResult = workflow.step(resultValue, resultValue.context, command)
+              val nextResult = workflow.step(resultValue, resultValue.context, command, interceptors)
               nextResult.fold(
                 { currentResult }, // Keep error from previous step
                 { workflowResult ->
@@ -490,10 +518,15 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
 
   override fun build(): BuiltWorkflow<UCC, I, E> {
     return object : BuiltWorkflow<UCC, I, E>() {
-      override suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult> {
+      override suspend fun execute(
+        input: I,
+        result: WorkflowResult,
+        command: UCC,
+        interceptors: List<WorkflowInterceptor>
+      ): Either<WorkflowError, WorkflowResult> {
         val deferredResults = coroutineScope {
           workflows.map { workflow ->
-            async { workflow.step(result, result.context, command) }
+            async { workflow.step(result, result.context, command, interceptors) }
           }
         }
         val results = deferredResults.awaitAll()
