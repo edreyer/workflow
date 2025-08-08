@@ -41,8 +41,8 @@ fun main() {
     parallel {
       then(CheckInventoryWorkflow("check-inventory"))
       then(ProcessPaymentWorkflow("process-payment")) {
-        "orderId" from "orderId"  // This would be automatic, but including for clarity
-        "amount" from "totalAmount" // Map from command's totalAmount to amount in ProcessPaymentCommand
+        ProcessPaymentCommand::orderId from ProcessOrderCommand::orderId  // This would be automatic, but including for clarity
+        ProcessPaymentCommand::amount from ProcessOrderCommand::totalAmount // Map from command's totalAmount to amount in ProcessPaymentCommand
       }
     }
 
@@ -57,7 +57,7 @@ fun main() {
       }
     ) {
       // Map from different event fields to the shipment command fields
-      "items" from "availableItems" // from InventoryVerifiedEvent
+      PrepareShipmentCommand::items from InventoryVerifiedEvent::availableItems // from InventoryVerifiedEvent
     }
   }
 

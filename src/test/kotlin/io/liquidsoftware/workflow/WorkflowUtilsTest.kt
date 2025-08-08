@@ -78,7 +78,7 @@ class WorkflowUtilsTest {
         // Given
         val command = TestCommand(UUID.randomUUID(), "Test Name")
         val result = WorkflowResult()
-        val propertyMap = mapOf("id" to "id", "name" to "name")
+        val propertyMap = mapOf(TestWorkflowInput::id to TestCommand::id, TestWorkflowInput::name to TestCommand::name)
 
         // When
         val input = WorkflowUtils.autoMapInput(result, command, propertyMap, TestWorkflowInput::class)
@@ -94,7 +94,7 @@ class WorkflowUtilsTest {
         // Given
         val command = TestCommand(UUID.randomUUID(), "Test Name")
         val result = WorkflowResult()
-        val propertyMap = mapOf("id" to "id", "name" to "name")
+        val propertyMap = mapOf(TestWorkflowInput::id to TestCommand::id, TestWorkflowInput::name to TestCommand::name)
 
         // When
         val input = WorkflowUtils.autoMapInput(result, command, propertyMap, TestWorkflowInput::class)

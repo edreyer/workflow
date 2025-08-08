@@ -19,8 +19,8 @@ class AutoMappingExampleTest {
     val useCase = useCase<RegisterCustomerCommand> {
       // Auto-mapping for first workflow with property map
       first(validateCustomerWorkflow, mapOf(
-        "email" to "email",
-        "name" to "name"
+        ValidateCustomerInput::email to RegisterCustomerCommand::email,
+        ValidateCustomerInput::name to RegisterCustomerCommand::name
       ))
 
       // Auto-mapping - fields match directly with ValidatedCustomerEvent
@@ -46,14 +46,14 @@ class AutoMappingExampleTest {
     val useCase = useCase<RegisterCustomerCommand> {
       // Auto-mapping for first workflow with builder pattern
       first(validateCustomerWorkflow) {
-        "email" from "email"
-        "name" from "name"
+        ValidateCustomerInput::email from RegisterCustomerCommand::email
+        ValidateCustomerInput::name from RegisterCustomerCommand::name
       }
 
       // Auto-mapping with property name mapping
       this.then(sendWelcomeEmailWorkflow, mapOf(
-        "recipientEmail" to "email",
-        "recipientName" to "name"
+        SendWelcomeEmailInput::recipientEmail to RegisterCustomerCommand::email,
+        SendWelcomeEmailInput::recipientName to RegisterCustomerCommand::name
       ))
     }
 
@@ -77,8 +77,8 @@ class AutoMappingExampleTest {
     val useCase = useCase<RegisterCustomerCommand> {
       // Auto-mapping for first workflow with property map
       first(validateCustomerWorkflow, mapOf(
-        "email" to "email",
-        "name" to "name"
+        ValidateCustomerInput::email to RegisterCustomerCommand::email,
+        ValidateCustomerInput::name to RegisterCustomerCommand::name
       ))
 
       // Auto-mapping - fields match directly with ValidatedCustomerEvent
@@ -86,15 +86,15 @@ class AutoMappingExampleTest {
 
       // Auto-mapping with property name mapping
       this.then(sendWelcomeEmailWorkflow, mapOf(
-        "recipientEmail" to "email",
-        "recipientName" to "name"
+        SendWelcomeEmailInput::recipientEmail to RegisterCustomerCommand::email,
+        SendWelcomeEmailInput::recipientName to RegisterCustomerCommand::name
       ))
 
       // Auto-mapping using builder pattern
       then(storeCustomerWorkflow) {
-        "customerEmail" from "email"
-        "customerName" from "name"
-        "customerId" from "id"
+        StoreCustomerInput::customerEmail from ValidatedCustomerEvent::email
+        StoreCustomerInput::customerName from ValidatedCustomerEvent::name
+        StoreCustomerInput::customerId from ValidatedCustomerEvent::id
       }
     }
 
