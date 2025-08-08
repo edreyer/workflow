@@ -2,13 +2,18 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import arrow.core.flatMap
+import arrow.core.left
 import arrow.core.raise.either
 import arrow.core.right
 import io.liquidsoftware.workflow.WorkflowError.CompositionError
 import io.liquidsoftware.workflow.WorkflowError.ExecutionError
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlin.reflect.KClass
 import kotlin.reflect.KParameter
 import kotlin.reflect.full.memberProperties
@@ -107,11 +112,17 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
    *
    * Workflows inside the parallel block will be executed concurrently.
    *
+   * @param maxConcurrency Optional limit on the number of concurrently executing workflows
+   * @param stepTimeoutMillis Optional timeout in milliseconds for each workflow step
    * @param block Configuration block for parallel workflows
    */
-  fun parallel(block: ParallelBlock<UCC, WorkflowInput, Event>.() -> Unit) {
+  fun parallel(
+    maxConcurrency: Int? = null,
+    stepTimeoutMillis: Long? = null,
+    block: ParallelBlock<UCC, WorkflowInput, Event>.() -> Unit
+  ) {
     otherMethodCalled = true
-    val parallelBlock = ParallelBlock<UCC, WorkflowInput, Event>()
+    val parallelBlock = ParallelBlock<UCC, WorkflowInput, Event>(maxConcurrency, stepTimeoutMillis)
     parallelBlock.block()
     builders.add(object : BaseWorkflowChainBuilder<UCC, WorkflowInput, Event>() {
 
@@ -470,7 +481,10 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
   }
 }
 
-internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowInput, E : Event> :
+internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowInput, E : Event>(
+  private val maxConcurrency: Int? = null,
+  private val stepTimeoutMillis: Long? = null
+) :
   BaseWorkflowChainBuilder<UCC, I, E>() {
 
   override fun <C : WorkflowInput, R : Event> then(
@@ -490,10 +504,35 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
 
   override fun build(): BuiltWorkflow<UCC, I, E> {
     return object : BuiltWorkflow<UCC, I, E>() {
-      override suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult> {
+      override suspend fun execute(
+        input: I,
+        result: WorkflowResult,
+        command: UCC
+      ): Either<WorkflowError, WorkflowResult> {
+        val semaphore = maxConcurrency?.let { Semaphore(it) }
         val deferredResults = coroutineScope {
           workflows.map { workflow ->
-            async { workflow.step(result, result.context, command) }
+            async {
+              val executeStep: suspend () -> Either<WorkflowError, WorkflowResult> = {
+                workflow.step(result, result.context, command)
+              }
+              val timed: suspend () -> Either<WorkflowError, WorkflowResult> = {
+                if (stepTimeoutMillis != null) {
+                  try {
+                    withTimeout(stepTimeoutMillis) { executeStep() }
+                  } catch (_: TimeoutCancellationException) {
+                    ExecutionError("Workflow step timed out").left()
+                  }
+                } else {
+                  executeStep()
+                }
+              }
+              if (semaphore != null) {
+                semaphore.withPermit { timed() }
+              } else {
+                timed()
+              }
+            }
           }
         }
         val results = deferredResults.awaitAll()
@@ -570,8 +609,11 @@ private fun buildPropertyMap(block: PropertyMappingBuilder.() -> Unit): Map<Stri
  * This class provides a DSL for configuring workflows to be executed in parallel.
  * Workflows added to this block will be executed concurrently.
  */
-class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal constructor() {
-  private val builder = ParallelWorkflowChainBuilder<UCC, I, E>()
+class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal constructor(
+  maxConcurrency: Int? = null,
+  stepTimeoutMillis: Long? = null
+) {
+  private val builder = ParallelWorkflowChainBuilder<UCC, I, E>(maxConcurrency, stepTimeoutMillis)
 
   /**
    * Adds a workflow to be executed in parallel
