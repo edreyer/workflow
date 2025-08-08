@@ -18,7 +18,7 @@ class WorkflowChainTest {
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(workflow = initialWorkflow)
-      this.then(nextWorkflow, mapOf("id" to "id"))
+      this.then(nextWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -42,7 +42,7 @@ class WorkflowChainTest {
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(workflow = initialWorkflow)
-      this.then(nextWorkflow, mapOf("id" to "id"))
+      this.then(nextWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -63,7 +63,7 @@ class WorkflowChainTest {
 
     val useCase: UseCase<io.liquidsoftware.workflow.TestUseCaseCommand> = useCase {
       first(workflow = initialWorkflow)
-      this.then(nextWorkflow, mapOf("id" to "id"))
+      this.then(nextWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -164,8 +164,8 @@ class WorkflowChainTest {
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(workflow = initialWorkflow)
-      this.then(secondWorkflow, mapOf("id" to "id"))
-      this.then(thirdWorkflow, mapOf("id" to "id"))
+      this.then(secondWorkflow, mapOf(TestCommand::id to TestEvent::id))
+      this.then(thirdWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -185,7 +185,7 @@ class WorkflowChainTest {
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(workflow = initialWorkflow)
-      this.then(nextWorkflow, mapOf("id" to "id"))
+      this.then(nextWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -207,7 +207,7 @@ class WorkflowChainTest {
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(workflow = initialWorkflow)
-      this.then(nextWorkflow, mapOf("id" to "id"))
+      this.then(nextWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -293,8 +293,8 @@ class WorkflowChainTest {
         this.then(secondWorkflow)
         this.then(thirdWorkflow)
       }
-      this.then(fourthWorkflow, mapOf("id" to "id"))
-      this.then(fifthWorkflow, mapOf("id" to "id"))
+      this.then(fourthWorkflow, mapOf(TestCommand::id to TestEvent::id))
+      this.then(fifthWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -321,8 +321,8 @@ class WorkflowChainTest {
 
     val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(workflow = workflowA)
-      this.then(workflowB, mapOf("id" to "id"))
-      this.then(workflowC, mapOf("id" to "id"))
+      this.then(workflowB, mapOf(TestCommand::id to TestEvent::id))
+      this.then(workflowC, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
@@ -391,7 +391,7 @@ class WorkflowChainTest {
         this.then(secondWorkflow)
         this.then(thirdWorkflow)
       }
-      this.then(fourthWorkflow, mapOf("id" to "id"))
+      this.then(fourthWorkflow, mapOf(TestCommand::id to TestEvent::id))
       build()
     }
 
