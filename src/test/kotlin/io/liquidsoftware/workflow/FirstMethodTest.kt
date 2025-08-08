@@ -18,15 +18,16 @@ class FirstMethodTest {
         override val timestamp: Instant
     ) : Event
 
-    class TestWorkflow(override val id: String) : Workflow<TestWorkflowInput, TestEvent>() {
-        override suspend fun executeWorkflow(input: TestWorkflowInput): Either<WorkflowError, WorkflowResult> = either {
-            val event = TestEvent(
-                id = UUID.randomUUID(),
-                timestamp = Instant.now()
-            )
-            WorkflowResult(listOf(event))
+    private fun testWorkflow(id: String): Workflow<TestWorkflowInput, TestEvent> =
+        workflow(id) { _: TestWorkflowInput ->
+            either {
+                val event = TestEvent(
+                    id = UUID.randomUUID(),
+                    timestamp = Instant.now()
+                )
+                WorkflowResult(listOf(event))
+            }
         }
-    }
 
     @Test
     fun `first() must be called at least once`() {
@@ -48,9 +49,9 @@ class FirstMethodTest {
         // Should throw an exception when firstWithAutoMapping() is not the first method called
         val exception = assertThrows<IllegalStateException> {
             useCase<TestCommand> {
-                this.then(TestWorkflow("test"))
+                this.then(testWorkflow("test"))
 
-                first(workflow = TestWorkflow("test"))
+                first(workflow = testWorkflow("test"))
             }
         }
 
@@ -62,8 +63,8 @@ class FirstMethodTest {
         // Should throw an exception when firstWithAutoMapping() is called more than once
         val exception = assertThrows<IllegalStateException> {
             useCase<TestCommand> {
-                first(workflow = TestWorkflow("test1"))
-                first(workflow = TestWorkflow("test2"))
+                first(workflow = testWorkflow("test1"))
+                first(workflow = testWorkflow("test2"))
             }
         }
 
@@ -74,9 +75,9 @@ class FirstMethodTest {
     fun `valid usage of first() method`() {
         // Should not throw an exception when firstWithAutoMapping() is used correctly
         val useCase = useCase<TestCommand> {
-            first(workflow = TestWorkflow("test"))
+            first(workflow = testWorkflow("test"))
 
-          this.then(TestWorkflow("next"))
+          this.then(testWorkflow("next"))
         }
 
         // Execute the use case to ensure it works
