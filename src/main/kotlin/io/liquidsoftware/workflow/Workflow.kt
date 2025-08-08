@@ -41,6 +41,15 @@ abstract class Workflow<I : WorkflowInput, E : Event> {
   }
 }
 
+fun <I : WorkflowInput, E : Event> workflow(
+  id: String,
+  block: suspend (I) -> Either<WorkflowError, WorkflowResult>
+): Workflow<I, E> = object : Workflow<I, E>() {
+  override val id: String = id
+  override suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult> =
+    block(input)
+}
+
 abstract class UseCase<UCC : UseCaseCommand> {
   abstract suspend fun execute(command: UCC): Either<WorkflowError, WorkflowResult>
 }

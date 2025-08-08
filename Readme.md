@@ -206,6 +206,23 @@ Each Workflow encapsulates a single responsibility or operation within your doma
 
 These individual Workflows can then be assembled into a complete `UserRegistrationUseCase` using the provided DSL.
 
+#### Building a Workflow
+
+While you can subclass `Workflow` directly, the library also provides a `workflow` helper
+for quickly defining steps inline. The helper constructs an anonymous `Workflow` and
+delegates its execution to the supplied lambda:
+
+```kotlin
+val validateCustomer = workflow<ValidateCustomerInput, ValidatedCustomerEvent>("validate-customer") { input ->
+  either {
+    val event = ValidatedCustomerEvent(email = input.email, name = input.name)
+    WorkflowResult(listOf(event))
+  }
+}
+```
+
+This approach reduces boilerplate when creating simple workflows.
+
 #### Workflows vs. Services
 
 While Services and Workflows can coexist in your architecture, they serve different purposes:
