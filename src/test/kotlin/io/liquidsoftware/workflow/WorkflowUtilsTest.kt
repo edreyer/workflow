@@ -49,7 +49,7 @@ class WorkflowUtilsTest {
         val result = WorkflowResult()
 
         // When
-        val input = WorkflowUtils.autoMapInput(result, command, emptyMap(), TestWorkflowInput::class)
+        val input = WorkflowUtils.autoMapInput(result, command, PropertyMapping.EMPTY, TestWorkflowInput::class)
 
         // Then
         assertNotNull(input)
@@ -65,7 +65,7 @@ class WorkflowUtilsTest {
         val command = TestCommand(UUID.randomUUID(), "Ignored Name")
 
         // When
-        val input = WorkflowUtils.autoMapInput(result, command, emptyMap(), TestWorkflowInput::class)
+        val input = WorkflowUtils.autoMapInput(result, command, PropertyMapping.EMPTY, TestWorkflowInput::class)
 
         // Then
         assertNotNull(input)
@@ -78,7 +78,7 @@ class WorkflowUtilsTest {
         // Given
         val command = TestCommand(UUID.randomUUID(), "Test Name")
         val result = WorkflowResult()
-        val propertyMap = mapOf("id" to "id", "name" to "name")
+        val propertyMap = PropertyMapping.EMPTY
 
         // When
         val input = WorkflowUtils.autoMapInput(result, command, propertyMap, TestWorkflowInput::class)
@@ -94,7 +94,7 @@ class WorkflowUtilsTest {
         // Given
         val command = TestCommand(UUID.randomUUID(), "Test Name")
         val result = WorkflowResult()
-        val propertyMap = mapOf("id" to "id", "name" to "name")
+        val propertyMap = PropertyMapping.EMPTY
 
         // When
         val input = WorkflowUtils.autoMapInput(result, command, propertyMap, TestWorkflowInput::class)
@@ -113,9 +113,30 @@ class WorkflowUtilsTest {
         val result = WorkflowResult()
 
         // When
-        val input = WorkflowUtils.autoMapInput(result, command, emptyMap(), UnmappableInput::class)
+        val input = WorkflowUtils.autoMapInput(result, command, PropertyMapping.EMPTY, UnmappableInput::class)
 
         // Then
+        assertNull(input)
+    }
+
+    @Test
+    fun `autoMapInput should return null when type mismatch occurs in property mapping`() {
+        // Given - a workflow input that expects a String id but we try to map a UUID
+        data class WorkflowInputWithStringId(val id: String, val name: String) : WorkflowCommand
+        val command = TestCommand(UUID.randomUUID(), "Test Name")
+        val result = WorkflowResult()
+
+        // Property mapping that tries to map UUID to String (type mismatch)
+        val propertyMapping = PropertyMapping(
+            typedMappings = mapOf(
+                "id" to Key.of<UUID>("id") // This should cause type mismatch - UUID mapped to String
+            )
+        )
+
+        // When
+        val input = WorkflowUtils.autoMapInput(result, command, propertyMapping, WorkflowInputWithStringId::class)
+
+        // Then - should return null due to type mismatch, which will trigger CompositionError at composition time
         assertNull(input)
     }
 }

@@ -17,14 +17,14 @@ class AutoMappingExampleTest {
     val initialCommand = RegisterCustomerCommand("test@example.com", "John Doe")
 
     val useCase = useCase<RegisterCustomerCommand> {
-      // Auto-mapping for first workflow with property map
-      first(validateCustomerWorkflow, mapOf(
-        "email" to "email",
-        "name" to "name"
-      ))
+      // Auto-mapping for first workflow with property mapping
+      first(validateCustomerWorkflow) {
+        "email" from Key.of<String>("email")
+        "name" from Key.of<String>("name")
+      }
 
       // Auto-mapping - fields match directly with ValidatedCustomerEvent
-      this.then(createCustomerWorkflow)
+      this.then(createCustomerWorkflow, PropertyMapping.EMPTY)
     }
 
     // When
@@ -46,15 +46,15 @@ class AutoMappingExampleTest {
     val useCase = useCase<RegisterCustomerCommand> {
       // Auto-mapping for first workflow with builder pattern
       first(validateCustomerWorkflow) {
-        "email" from "email"
-        "name" from "name"
+        "email" from Key.of<String>("email")
+        "name" from Key.of<String>("name")
       }
 
       // Auto-mapping with property name mapping
-      this.then(sendWelcomeEmailWorkflow, mapOf(
-        "recipientEmail" to "email",
-        "recipientName" to "name"
-      ))
+      this.then(sendWelcomeEmailWorkflow) {
+        "recipientEmail" from Key.of<String>("email")
+        "recipientName" from Key.of<String>("name")
+      }
     }
 
     // When
@@ -75,26 +75,26 @@ class AutoMappingExampleTest {
     val initialCommand = RegisterCustomerCommand("test@example.com", "John Doe")
 
     val useCase = useCase<RegisterCustomerCommand> {
-      // Auto-mapping for first workflow with property map
-      first(validateCustomerWorkflow, mapOf(
-        "email" to "email",
-        "name" to "name"
-      ))
+      // Auto-mapping for first workflow with property mapping
+      first(validateCustomerWorkflow) {
+        "email" from Key.of<String>("email")
+        "name" from Key.of<String>("name")
+      }
 
       // Auto-mapping - fields match directly with ValidatedCustomerEvent
-      this.then(createCustomerWorkflow)
+      this.then(createCustomerWorkflow, PropertyMapping.EMPTY)
 
       // Auto-mapping with property name mapping
-      this.then(sendWelcomeEmailWorkflow, mapOf(
-        "recipientEmail" to "email",
-        "recipientName" to "name"
-      ))
+      this.then(sendWelcomeEmailWorkflow) {
+        "recipientEmail" from Key.of<String>("email")
+        "recipientName" from Key.of<String>("name")
+      }
 
       // Auto-mapping using builder pattern
       then(storeCustomerWorkflow) {
-        "customerEmail" from "email"
-        "customerName" from "name"
-        "customerId" from "id"
+        "customerEmail" from Key.of<String>("email")
+        "customerName" from Key.of<String>("name")
+        "customerId" from Key.of<UUID>("id")
       }
     }
 

@@ -41,8 +41,8 @@ fun main() {
     parallel {
       then(CheckInventoryWorkflow("check-inventory"))
       then(ProcessPaymentWorkflow("process-payment")) {
-        "orderId" from "orderId"  // This would be automatic, but including for clarity
-        "amount" from "totalAmount" // Map from command's totalAmount to amount in ProcessPaymentCommand
+        "orderId" from Key.of<UUID>("orderId")      // Type-safe UUID mapping
+        "amount" from Key.of<Double>("totalAmount") // Type-safe Double mapping
       }
     }
 
@@ -57,7 +57,7 @@ fun main() {
       }
     ) {
       // Map from different event fields to the shipment command fields
-      "items" from "availableItems" // from InventoryVerifiedEvent
+      "items" from Key.of<List<OrderItem>>("availableItems") // Type-safe collection mapping
     }
   }
 

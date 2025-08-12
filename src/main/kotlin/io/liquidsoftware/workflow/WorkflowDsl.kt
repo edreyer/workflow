@@ -37,7 +37,7 @@ fun <UCC : UseCaseCommand> useCase(
 class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
   private var initialWorkflow: Workflow<WorkflowInput, Event>? = null
   private var initialWorkflowMapper: ((UCC) -> WorkflowInput)? = null
-  private var initialPropertyMap: Map<String, String> = emptyMap()
+  private var initialPropertyMapping: PropertyMapping = PropertyMapping.EMPTY
   private var firstCalled = false
   private var otherMethodCalled = false
   private var _command: UCC? = null
@@ -59,18 +59,18 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
 
 
   /**
-   * Sets the initial workflow in the chain with a property map for input mapping
+   * Sets the initial workflow in the chain with a property mapping for input mapping
    *
    * This method must be called exactly once and must be the first method called
    * in the DSL configuration block.
    *
    * @param workflow The initial workflow to execute
-   * @param propertyMap Map of target property names to source property names for input mapping
+   * @param propertyMapping PropertyMapping with type-safe mappings for input mapping
    * @throws IllegalStateException if called more than once or after other methods
    */
   fun <WFI : WorkflowInput, E : Event> first(
     workflow: Workflow<WFI, E>,
-    propertyMap: Map<String, String> = emptyMap()
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY
   ) {
     if (firstCalled) {
       throw IllegalStateException("first() method can only be called once")
@@ -80,7 +80,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     }
     @Suppress("UNCHECKED_CAST")
     initialWorkflow = workflow as Workflow<WorkflowInput, Event>
-    initialPropertyMap = propertyMap
+    initialPropertyMapping = propertyMapping
     initialWorkflowMapper = null
     firstCalled = true
   }
@@ -99,7 +99,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     workflow: Workflow<WFI, E>,
     block: PropertyMappingBuilder.() -> Unit
   ) {
-    first(workflow, buildPropertyMap(block))
+    first(workflow, buildPropertyMapping(block))
   }
 
   /**
@@ -117,7 +117,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
 
       override fun <C : WorkflowInput, R : Event> then(
         workflow: Workflow<C, R>,
-        propertyMap: Map<String, String>
+        propertyMapping: PropertyMapping
       ) {
         throw UnsupportedOperationException("Cannot add workflows to a parallel block after it's created")
       }
@@ -125,7 +125,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
       override fun <C : WorkflowInput, R : Event> thenIf(
         workflow: Workflow<C, R>,
         predicate: (WorkflowResult) -> Boolean,
-        propertyMap: Map<String, String>
+        propertyMapping: PropertyMapping
       ) {
         throw UnsupportedOperationException("Cannot add workflows to a parallel block after it's created")
       }
@@ -140,14 +140,14 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
    * Adds a workflow to be executed sequentially after the previous workflow
    *
    * @param workflow The workflow to execute
-   * @param propertyMap Map of target property names to source property names for input mapping
+   * @param propertyMapping PropertyMapping with type-safe mappings for input mapping
    */
   fun <C : WorkflowInput, R : Event> then(
     workflow: Workflow<C, R>,
-    propertyMap: Map<String, String> = emptyMap()
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY
   ) {
     otherMethodCalled = true
-    currentBuilder.then(workflow, propertyMap)
+    currentBuilder.then(workflow, propertyMapping)
   }
 
   /**
@@ -162,7 +162,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     block: PropertyMappingBuilder.() -> Unit
   ) {
     otherMethodCalled = true
-    currentBuilder.then(workflow, buildPropertyMap(block))
+    currentBuilder.then(workflow, buildPropertyMapping(block))
   }
 
   /**
@@ -172,15 +172,15 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
    *
    * @param workflow The workflow to execute
    * @param predicate Condition that determines if the workflow should be executed
-   * @param propertyMap Map of target property names to source property names for input mapping
+   * @param propertyMapping PropertyMapping with type-safe mappings for input mapping
    */
   fun <C : WorkflowInput, R : Event> thenIf(
     workflow: Workflow<C, R>,
     predicate: (WorkflowResult) -> Boolean,
-    propertyMap: Map<String, String> = emptyMap()
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY
   ) {
     otherMethodCalled = true
-    currentBuilder.thenIf(workflow, predicate, propertyMap)
+    currentBuilder.thenIf(workflow, predicate, propertyMapping)
   }
 
   /**
@@ -199,7 +199,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     block: PropertyMappingBuilder.() -> Unit
   ) {
     otherMethodCalled = true
-    currentBuilder.thenIf(workflow, predicate, buildPropertyMap(block))
+    currentBuilder.thenIf(workflow, predicate, buildPropertyMapping(block))
   }
 
   /**
@@ -243,7 +243,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
             )
 
           // Use WorkflowUtils.autoMapInput
-          WorkflowUtils.autoMapInput(emptyResult, ucCommand, that.initialPropertyMap, inputClass)
+          WorkflowUtils.autoMapInput(emptyResult, ucCommand, that.initialPropertyMapping, inputClass)
             ?: raise(
               CompositionError(
                 "Cannot auto-map to ${inputClass.simpleName}",
@@ -292,46 +292,124 @@ object WorkflowUtils {
   }
 
   /**
-   * Maps properties from various sources to create a workflow input
+   * Maps properties from various sources to create a workflow input with type-safe validation
    */
   fun <T : WorkflowInput> autoMapInput(
     result: WorkflowResult,
     command: UseCaseCommand,
-    propertyMap: Map<String, String> = emptyMap(),
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY,
     clazz: KClass<T>
   ): T? {
     val constructor = clazz.primaryConstructor ?: return null
     val args = mutableMapOf<KParameter, Any?>()
 
     for (param in constructor.parameters) {
-      // Check if there's a custom mapping for this parameter
-      val sourcePropertyName = propertyMap[param.name] ?: param.name
+        val value = when {
+            // Check for typed mapping
+            propertyMapping.typedMappings.containsKey(param.name) -> {
+                val sourceKey = propertyMapping.typedMappings[param.name]!!
+                val expectedType = param.type.classifier as? KClass<*>
+                val sourceType = sourceKey.type
 
-      val value = when {
-        // Try to find matching event property (using mapped name)
-        findInEvents(result.events, sourcePropertyName, param.type.classifier as? KClass<*>) != null ->
-          findInEvents(result.events, sourcePropertyName, param.type.classifier as? KClass<*>)
+                // Validate type compatibility before looking for value
+                if (expectedType != null && expectedType != sourceType) {
+                    // Type mismatch - this will be handled at composition time
+                    return null
+                }
 
-        // Try to find in command (using mapped name)
-        findInCommand(command, sourcePropertyName) != null ->
-          findInCommand(command, sourcePropertyName)
+                findTypedValue(result, command, sourceKey)
+            }
 
-        // Try context data (using mapped name)
-        result.context.data[sourcePropertyName] != null ->
-          result.context.data[sourcePropertyName]
+            // Default to parameter name with type checking
+            else -> {
+                val expectedType = param.type.classifier as? KClass<*>
+                findValue(result, command, param.name ?: "", expectedType)
+            }
+        }
 
-        // Check if parameter is optional
-        param.isOptional -> null
-
-        else -> return null // Cannot satisfy required parameter
-      }
-
-      if (value != null || param.isOptional) {
-        args[param] = value
-      }
+        when {
+            value != null -> args[param] = value
+            param.isOptional -> args[param] = null
+            else -> return null // Cannot satisfy required parameter
+        }
     }
 
     return constructor.runCatching { callBy(args) }.getOrNull()
+  }
+
+  /**
+   * Type-safe value finder using Key<T>
+   */
+  private fun <T : Any> findTypedValue(
+    result: WorkflowResult,
+    command: UseCaseCommand,
+    sourceKey: Key<T>
+  ): T? {
+    // Try events first
+    findInEventsTyped(result.events, sourceKey)?.let { return it }
+
+    // Try command
+    findInCommandTyped(command, sourceKey)?.let { return it }
+
+    // Try context
+    result.context.data[sourceKey.id]?.let { value ->
+        if (sourceKey.type.isInstance(value)) {
+            @Suppress("UNCHECKED_CAST")
+            return value as T
+        }
+    }
+
+    return null
+  }
+
+  /**
+   * Type-safe event property finder
+   */
+  private fun <T : Any> findInEventsTyped(events: List<Event>, sourceKey: Key<T>): T? {
+    return events.firstNotNullOfOrNull { event ->
+        val eventClass = event::class
+        val property = eventClass.memberProperties.find { it.name == sourceKey.id }
+        property?.let {
+            runCatching { it.getter.call(event) }
+                .getOrNull()
+                ?.takeIf { value -> sourceKey.type.isInstance(value) }
+                ?.let {
+                    @Suppress("UNCHECKED_CAST")
+                    it as T
+                }
+        }
+    }
+  }
+
+  /**
+   * Type-safe command property finder
+   */
+  private fun <T : Any> findInCommandTyped(command: UseCaseCommand, sourceKey: Key<T>): T? {
+    val commandClass = command::class
+    val property = commandClass.memberProperties.find { it.name == sourceKey.id }
+    return property?.getter?.runCatching { call(command) }
+        ?.getOrNull()
+        ?.takeIf { sourceKey.type.isInstance(it) }
+        ?.let {
+            @Suppress("UNCHECKED_CAST")
+            it as T
+        }
+  }
+
+  /**
+   * Finds a property value with type checking (fallback for default mappings)
+   */
+  private fun findValue(result: WorkflowResult, command: UseCaseCommand, propertyName: String, targetType: KClass<*>?): Any? {
+    // Try to find matching event property
+    findInEvents(result.events, propertyName, targetType)?.let { return it }
+
+    // Try to find in command
+    findInCommand(command, propertyName)?.let { return it }
+
+    // Try context data
+    return result.context.data[propertyName]?.takeIf { value ->
+        targetType == null || targetType.isInstance(value)
+    }
   }
 
   /**
@@ -363,15 +441,15 @@ object WorkflowUtils {
 }
 
 /**
- * Extension function to auto-map and execute a workflow
+ * Extension function to auto-map and execute a workflow with type-safe validation
  */
 suspend fun <C : WorkflowInput, R : Event, UCC : UseCaseCommand> WorkflowResult.autoMapInputAndExecuteNext(
   workflow: Workflow<C, R>,
   command: UCC,
-  propertyMap: Map<String, String> = emptyMap(),
+  propertyMapping: PropertyMapping = PropertyMapping.EMPTY,
   clazz: KClass<C>
 ): Either<WorkflowError, WorkflowResult> = Either.catch {
-  WorkflowUtils.autoMapInput(this, command, propertyMap, clazz)
+  WorkflowUtils.autoMapInput(this, command, propertyMapping, clazz)
     ?: throw AutoMappingException("Cannot auto-map to ${clazz.simpleName}")
 }
   .mapLeft { ex -> CompositionError("Error mapping input: ${ex.message ?: "Unknown error"}", ex) }
@@ -382,13 +460,13 @@ internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : Workf
 
   abstract fun <C : WorkflowInput, R : Event> then(
     workflow: Workflow<C, R>,
-    propertyMap: Map<String, String> = emptyMap()
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY
   )
 
   abstract fun <C : WorkflowInput, R : Event> thenIf(
     workflow: Workflow<C, R>,
     predicate: (WorkflowResult) -> Boolean,
-    propertyMap: Map<String, String> = emptyMap()
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY
   )
 
   /**
@@ -396,7 +474,7 @@ internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : Workf
    */
   protected fun <C : WorkflowInput, R : Event> createWorkflowStep(
     workflow: Workflow<C, R>,
-    propertyMap: Map<String, String>,
+    propertyMapping: PropertyMapping,
     predicate: ((WorkflowResult) -> Boolean)? = null,
     withCoroutineScope: Boolean = false
   ): WorkflowStep<UCC, I, E> {
@@ -405,7 +483,7 @@ internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : Workf
         if (predicate == null || predicate(result)) {
           val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
             ?: throw IllegalArgumentException("Cannot determine input type for workflow")
-          result.autoMapInputAndExecuteNext(workflow, command, propertyMap, clazz)
+          result.autoMapInputAndExecuteNext(workflow, command, propertyMapping, clazz)
         } else {
           // Return the original result when predicate is false
           result.right()
@@ -428,17 +506,17 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
 
   override fun <C : WorkflowInput, R : Event> then(
     workflow: Workflow<C, R>,
-    propertyMap: Map<String, String>
+    propertyMapping: PropertyMapping
   ) {
-    workflows.add(createWorkflowStep(workflow, propertyMap))
+    workflows.add(createWorkflowStep(workflow, propertyMapping))
   }
 
   override fun <C : WorkflowInput, R : Event> thenIf(
     workflow: Workflow<C, R>,
     predicate: (WorkflowResult) -> Boolean,
-    propertyMap: Map<String, String>
+    propertyMapping: PropertyMapping
   ) {
-    workflows.add(createWorkflowStep(workflow, propertyMap, predicate))
+    workflows.add(createWorkflowStep(workflow, propertyMapping, predicate))
   }
 
   override fun build(): BuiltWorkflow<UCC, I, E> {
@@ -450,7 +528,7 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
               val resultValue = currentResult.value
               val nextResult = workflow.step(resultValue, resultValue.context, command)
               nextResult.fold(
-                { currentResult }, // Keep error from previous step
+                { error -> Either.Left(error) }, // Propagate error from failed workflow step
                 { workflowResult ->
                   // If the returned result is the same as the original result (reference equality),
                   // it means the workflow step didn't execute (predicate was false)
@@ -475,17 +553,17 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
 
   override fun <C : WorkflowInput, R : Event> then(
     workflow: Workflow<C, R>,
-    propertyMap: Map<String, String>
+    propertyMapping: PropertyMapping
   ) {
-    workflows.add(createWorkflowStep(workflow, propertyMap, withCoroutineScope = true))
+    workflows.add(createWorkflowStep(workflow, propertyMapping, withCoroutineScope = true))
   }
 
   override fun <C : WorkflowInput, R : Event> thenIf(
     workflow: Workflow<C, R>,
     predicate: (WorkflowResult) -> Boolean,
-    propertyMap: Map<String, String>
+    propertyMapping: PropertyMapping
   ) {
-    workflows.add(createWorkflowStep(workflow, propertyMap, predicate, withCoroutineScope = true))
+    workflows.add(createWorkflowStep(workflow, propertyMapping, predicate, withCoroutineScope = true))
   }
 
   override fun build(): BuiltWorkflow<UCC, I, E> {
@@ -525,43 +603,49 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
 class AutoMappingException(message: String) : Exception(message)
 
 /**
- * Builder for creating property mappings between workflow inputs
+ * Container for type-safe property mappings
+ */
+data class PropertyMapping(
+    val typedMappings: Map<String, Key<*>> = emptyMap()
+) {
+    companion object {
+        val EMPTY = PropertyMapping()
+    }
+}
+
+/**
+ * Builder for creating type-safe property mappings between workflow inputs
  *
- * This class provides a DSL for configuring property mappings between
+ * This class provides a DSL for configuring type-safe property mappings between
  * source properties (from events, commands, or context) and target properties
  * (workflow input parameters).
  */
 class PropertyMappingBuilder {
-  private val mappings = mutableMapOf<String, String>()
+    private val typedMappings = mutableMapOf<String, Key<*>>()
 
-  /**
-   * Maps a target property to a source property
-   *
-   * @receiver The target property name in the workflow input
-   * @param sourceName The source property name from events, commands, or context
-   */
-  infix fun String.from(sourceName: String) {
-    mappings[this] = sourceName
-  }
+    /**
+     * Maps a target property to a type-safe source key
+     */
+    infix fun <T : Any> String.from(sourceKey: Key<T>) {
+        typedMappings[this] = sourceKey
+    }
 
-  /**
-   * Builds the property mapping
-   *
-   * @return A map of target property names to source property names
-   */
-  fun build(): Map<String, String> = mappings.toMap()
+    /**
+     * Builds the property mapping
+     */
+    fun build(): PropertyMapping = PropertyMapping(typedMappings = typedMappings.toMap())
 }
 
 /**
  * Utility function to build a property mapping from a configuration block
  *
  * @param block The property mapping configuration block
- * @return A map of target property names to source property names
+ * @return A PropertyMapping with type-safe mappings
  */
-private fun buildPropertyMap(block: PropertyMappingBuilder.() -> Unit): Map<String, String> {
-  val builder = PropertyMappingBuilder()
-  builder.block()
-  return builder.build()
+private fun buildPropertyMapping(block: PropertyMappingBuilder.() -> Unit): PropertyMapping {
+    val builder = PropertyMappingBuilder()
+    builder.block()
+    return builder.build()
 }
 
 /**
@@ -577,13 +661,13 @@ class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal
    * Adds a workflow to be executed in parallel
    *
    * @param workflow The workflow to execute
-   * @param propertyMap Map of target property names to source property names for input mapping
+   * @param propertyMapping PropertyMapping with type-safe mappings for input mapping
    */
   fun <C : WorkflowInput, R : Event> then(
     workflow: Workflow<C, R>,
-    propertyMap: Map<String, String> = emptyMap()
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY
   ) {
-    builder.then(workflow, propertyMap)
+    builder.then(workflow, propertyMapping)
   }
 
   /**
@@ -596,7 +680,7 @@ class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal
     workflow: Workflow<C, R>,
     block: PropertyMappingBuilder.() -> Unit
   ) {
-    builder.then(workflow, buildPropertyMap(block))
+    builder.then(workflow, buildPropertyMapping(block))
   }
 
   /**
@@ -606,14 +690,14 @@ class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal
    *
    * @param workflow The workflow to execute
    * @param predicate Condition that determines if the workflow should be executed
-   * @param propertyMap Map of target property names to source property names for input mapping
+   * @param propertyMapping PropertyMapping with type-safe mappings for input mapping
    */
   fun <C : WorkflowInput, R : Event> thenIf(
     workflow: Workflow<C, R>,
     predicate: (WorkflowResult) -> Boolean,
-    propertyMap: Map<String, String> = emptyMap()
+    propertyMapping: PropertyMapping = PropertyMapping.EMPTY
   ) {
-    builder.thenIf(workflow, predicate, propertyMap)
+    builder.thenIf(workflow, predicate, propertyMapping)
   }
 
   /**
@@ -630,7 +714,7 @@ class ParallelBlock<UCC : UseCaseCommand, I : WorkflowInput, E : Event> internal
     predicate: (WorkflowResult) -> Boolean,
     block: PropertyMappingBuilder.() -> Unit
   ) {
-    builder.thenIf(workflow, predicate, buildPropertyMap(block))
+    builder.thenIf(workflow, predicate, buildPropertyMapping(block))
   }
 
   /**
