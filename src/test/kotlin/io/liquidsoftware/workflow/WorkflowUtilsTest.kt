@@ -49,7 +49,7 @@ class WorkflowUtilsTest {
         val result = WorkflowResult()
 
         // When
-        val input = WorkflowUtils.autoMapInput(result, command, emptyMap(), TestWorkflowInput::class)
+        val input = WorkflowUtils.autoMapInput(result, command, PropertyMapping.EMPTY, TestWorkflowInput::class)
 
         // Then
         assertNotNull(input)
@@ -65,7 +65,7 @@ class WorkflowUtilsTest {
         val command = TestCommand(UUID.randomUUID(), "Ignored Name")
 
         // When
-        val input = WorkflowUtils.autoMapInput(result, command, emptyMap(), TestWorkflowInput::class)
+        val input = WorkflowUtils.autoMapInput(result, command, PropertyMapping.EMPTY, TestWorkflowInput::class)
 
         // Then
         assertNotNull(input)
@@ -78,7 +78,7 @@ class WorkflowUtilsTest {
         // Given
         val command = TestCommand(UUID.randomUUID(), "Test Name")
         val result = WorkflowResult()
-        val propertyMap = mapOf("id" to "id", "name" to "name")
+        val propertyMap = PropertyMapping.EMPTY
 
         // When
         val input = WorkflowUtils.autoMapInput(result, command, propertyMap, TestWorkflowInput::class)
@@ -94,7 +94,7 @@ class WorkflowUtilsTest {
         // Given
         val command = TestCommand(UUID.randomUUID(), "Test Name")
         val result = WorkflowResult()
-        val propertyMap = mapOf("id" to "id", "name" to "name")
+        val propertyMap = PropertyMapping.EMPTY
 
         // When
         val input = WorkflowUtils.autoMapInput(result, command, propertyMap, TestWorkflowInput::class)
@@ -113,7 +113,7 @@ class WorkflowUtilsTest {
         val result = WorkflowResult()
 
         // When
-        val input = WorkflowUtils.autoMapInput(result, command, emptyMap(), UnmappableInput::class)
+        val input = WorkflowUtils.autoMapInput(result, command, PropertyMapping.EMPTY, UnmappableInput::class)
 
         // Then
         assertNull(input)
