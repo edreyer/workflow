@@ -169,7 +169,8 @@ Here's how it looks to construct and execute a use case:
     parallel {
       then(CheckInventoryWorkflow("check-inventory"))
       then(ProcessPaymentWorkflow("process-payment")) {
-        "amount" from "totalAmount" // Map from command's totalAmount to amount in ProcessPaymentCommand
+        "orderId" from Key.of<UUID>("orderId")      // Type-safe UUID mapping
+        "amount" from Key.of<Double>("totalAmount") // Type-safe Double mapping
       }
     }
 
@@ -395,23 +396,52 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 
 ##### Property Mapping Block
 
-- **Purpose**: Explicitly map data between workflow steps
+- **Purpose**: Explicitly map data between workflow steps with type safety
 - **Usage**: Optional block after `then` or `thenIf` methods
-- **How it works**: Creates a mapping between output event properties and input command properties
+- **How it works**: Creates type-safe mappings between output event properties and input command properties using `Key<T>` objects
 - **Example**:
   ```
   then(createAccountWorkflow) {
-    "accountName" from "userName"
-    "initialBalance" from "depositAmount"
+    "accountName" from Key.of<String>("userName")
+    "initialBalance" from Key.of<Double>("depositAmount")
   }
   ```
 
 ##### `from` infix function
 
-- **Purpose**: Maps a source property to a target property
-- **Usage**: Used within a property mapping block
-- **How it works**: Specifies that the target property should be populated from the named source property
-- **Example**: `"targetField" from "sourceField"`
+- **Purpose**: Maps a source property to a target property with compile-time type safety
+- **Usage**: Used within a property mapping block with `Key<T>` objects
+- **How it works**: Specifies that the target property should be populated from the named source property, with type validation at composition time
+- **Example**: `"targetField" from Key.of<String>("sourceField")`
+
+##### Type-Safe Key Creation
+
+The `Key<T>` companion object provides several ways to create type-safe property keys:
+
+- **Generic creation**: `Key.of<Type>("propertyName")` - Uses reified generics for any type
+- **Convenience methods** for common types:
+  - `Key.string("propertyName")` - For String properties
+  - `Key.uuid("propertyName")` - For UUID properties  
+  - `Key.double("propertyName")` - For Double properties
+  - `Key.int("propertyName")` - For Int properties
+  - `Key.boolean("propertyName")` - For Boolean properties
+  - `Key.long("propertyName")` - For Long properties
+
+**Example using convenience methods**:
+```
+then(processPaymentWorkflow) {
+  "orderId" from Key.uuid("orderId")
+  "amount" from Key.double("totalAmount")
+  "verified" from Key.boolean("isVerified")
+}
+```
+
+##### Type Validation
+
+The system performs type validation at composition time:
+- If source and target types don't match, a `CompositionError` is thrown
+- Type mismatches are caught early during workflow composition, not at runtime
+- This prevents `ClassCastException` errors and provides clear error messages
 
 #### Data Extraction Methods
 
@@ -489,17 +519,24 @@ Error handling in workflow-based applications requires careful consideration. Th
 
 ##### CompositionError
 
-- **Purpose**: Represents errors in the composition or orchestration of workflows
-- **When to use**: When there are issues in the workflow chain setup or during inter-workflow communication
+- **Purpose**: Represents errors in the composition or orchestration of workflows, including type validation failures
+- **When to use**: When there are issues in the workflow chain setup, during inter-workflow communication, or when property mapping types don't match
 - **Characteristics**:
     - Contains a message and the underlying exception
     - Occurs during the construction or execution of the workflow chain
-    - Indicates configuration or architectural issues
+    - Indicates configuration, architectural, or type safety issues
+    - **Type Validation**: Triggered when source and target property types don't match in Key<T> mappings
+- **Common scenarios**:
+    - Missing workflow dependencies or configuration
+    - Type mismatches in property mappings (e.g., mapping UUID to String)
+    - Auto-mapping failures when required properties cannot be resolved
+    - Invalid workflow chain construction
 - **Handling strategy**:
     - These are typically developer errors that should be fixed in code
     - Log at ERROR level as they represent system design issues
     - Provide clear diagnostics to help identify the composition problem
     - Consider static analysis tools to catch these at compile time
+    - **Type mismatches**: Review property mapping configurations and ensure source/target type compatibility
 
 #### Global Error Handling Strategies
 
@@ -796,9 +833,9 @@ For use cases with complex data transformations:
 - **Explicit Property Mapping**: Use the property mapping DSL for clarity when transformations are complex
   ```kotlin
   then(GenerateInvoiceWorkflow("generate-invoice")) {
-    "invoiceItems" from "cartItems" // Transform from shopping cart to invoice
-    "billingAddress" from "shippingAddress" // Reuse address information
-    "invoiceDate" from "orderDate"
+    "invoiceItems" from Key.of<List<CartItem>>("cartItems") // Type-safe transformation from shopping cart to invoice
+    "billingAddress" from Key.of<Address>("shippingAddress") // Type-safe address information reuse
+    "invoiceDate" from Key.of<LocalDate>("orderDate") // Type-safe date mapping
   }
   ```
 
