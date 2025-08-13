@@ -308,19 +308,16 @@ object WorkflowUtils {
             // Check for typed mapping
             propertyMapping.typedMappings.containsKey(param.name) -> {
                 val sourceKey = propertyMapping.typedMappings[param.name]!!
-                val foundValue = findTypedValue(result, command, sourceKey)
+                val expectedType = param.type.classifier as? KClass<*>
+                val sourceType = sourceKey.type
 
-                // Validate type compatibility
-                if (foundValue != null) {
-                    val expectedType = param.type.classifier as? KClass<*>
-                    val actualType = sourceKey.type
-
-                    if (expectedType != null && !expectedType.isInstance(foundValue)) {
-                        // Type mismatch - this will be handled at composition time
-                        return null
-                    }
+                // Validate type compatibility before looking for value
+                if (expectedType != null && expectedType != sourceType) {
+                    // Type mismatch - this will be handled at composition time
+                    return null
                 }
-                foundValue
+
+                findTypedValue(result, command, sourceKey)
             }
 
             // Default to parameter name with type checking
@@ -531,7 +528,7 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
               val resultValue = currentResult.value
               val nextResult = workflow.step(resultValue, resultValue.context, command)
               nextResult.fold(
-                { currentResult }, // Keep error from previous step
+                { error -> Either.Left(error) }, // Propagate error from failed workflow step
                 { workflowResult ->
                   // If the returned result is the same as the original result (reference equality),
                   // it means the workflow step didn't execute (predicate was false)
