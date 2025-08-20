@@ -1,6 +1,6 @@
 plugins {
-  kotlin("jvm") version "2.1.20"
-  kotlin("plugin.serialization") version "2.1.20"
+  kotlin("jvm") version "2.2.10"
+  kotlin("plugin.serialization") version "2.2.10"
   id("com.github.ben-manes.versions") version "0.52.0"
 }
 
@@ -11,12 +11,12 @@ repositories {
     mavenCentral()
 }
 
-val arrowVersion = "2.1.0"
+val arrowVersion = "2.1.2"
 
 dependencies {
     // Kotlin Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
-    implementation("org.jetbrains.kotlin:kotlin-reflect:2.1.20")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlin:kotlin-reflect:2.2.10")
 
     implementation(platform("io.arrow-kt:arrow-stack:$arrowVersion"))
     implementation("io.arrow-kt:arrow-core")
