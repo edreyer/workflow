@@ -132,7 +132,7 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
 
       override fun build() = parallelBlock.build()
     })
-    currentBuilder = SequentialWorkflowChainBuilder<UCC, WorkflowInput, Event>()
+    currentBuilder = SequentialWorkflowChainBuilder()
     builders.add(currentBuilder)
   }
 
@@ -275,8 +275,8 @@ internal abstract class BuiltWorkflow<UCC : UseCaseCommand, I : WorkflowInput, E
   abstract suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult>
 }
 
-internal class WorkflowStep<UCC : UseCaseCommand, I : WorkflowInput, E : Event>(
-  val step: suspend (WorkflowResult, WorkflowContext, UCC) -> Either<WorkflowError, WorkflowResult>
+internal class WorkflowStep<UCC : UseCaseCommand>(
+  val step: suspend (WorkflowResult, UCC) -> Either<WorkflowError, WorkflowResult>
 )
 
 /**
@@ -369,8 +369,8 @@ object WorkflowUtils {
     return events.firstNotNullOfOrNull { event ->
         val eventClass = event::class
         val property = eventClass.memberProperties.find { it.name == sourceKey.id }
-        property?.let {
-            runCatching { it.getter.call(event) }
+        property?.let { prop ->
+          runCatching { prop.getter.call(event) }
                 .getOrNull()
                 ?.takeIf { value -> sourceKey.type.isInstance(value) }
                 ?.let {
@@ -456,7 +456,7 @@ suspend fun <C : WorkflowInput, R : Event, UCC : UseCaseCommand> WorkflowResult.
   .flatMap { input -> workflow.execute(input) }
 
 internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowInput, E : Event> {
-  protected val workflows = mutableListOf<WorkflowStep<UCC, I, E>>()
+  protected val workflows = mutableListOf<WorkflowStep<UCC>>()
 
   abstract fun <C : WorkflowInput, R : Event> then(
     workflow: Workflow<C, R>,
@@ -477,8 +477,8 @@ internal abstract class BaseWorkflowChainBuilder<UCC : UseCaseCommand, I : Workf
     propertyMapping: PropertyMapping,
     predicate: ((WorkflowResult) -> Boolean)? = null,
     withCoroutineScope: Boolean = false
-  ): WorkflowStep<UCC, I, E> {
-    return WorkflowStep { result, context, command ->
+  ): WorkflowStep<UCC> {
+    return WorkflowStep { result, command ->
       val executeStep: suspend () -> Either<WorkflowError, WorkflowResult> = {
         if (predicate == null || predicate(result)) {
           val clazz = WorkflowUtils.getWorkflowInputClass<C>(workflow)
@@ -526,7 +526,7 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
           when (currentResult) {
             is Either.Right -> {
               val resultValue = currentResult.value
-              val nextResult = workflow.step(resultValue, resultValue.context, command)
+              val nextResult = workflow.step(resultValue, command)
               nextResult.fold(
                 { error -> Either.Left(error) }, // Propagate error from failed workflow step
                 { workflowResult ->
@@ -571,7 +571,7 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
       override suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult> {
         val deferredResults = coroutineScope {
           workflows.map { workflow ->
-            async { workflow.step(result, result.context, command) }
+            async { workflow.step(result, command) }
           }
         }
         val results = deferredResults.awaitAll()

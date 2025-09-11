@@ -61,7 +61,7 @@ class WorkflowChainTest {
     val initialWorkflow = ThrowingWorkflow("T")
     val nextWorkflow = TestWorkflow("A")
 
-    val useCase: UseCase<io.liquidsoftware.workflow.TestUseCaseCommand> = useCase {
+    val useCase: UseCase<TestUseCaseCommand> = useCase {
       first(workflow = initialWorkflow)
       this.then(nextWorkflow)
       build()
