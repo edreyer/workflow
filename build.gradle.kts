@@ -1,33 +1,31 @@
 plugins {
-  kotlin("jvm") version "2.2.20"
-  kotlin("plugin.serialization") version "2.2.20"
-  id("com.github.ben-manes.versions") version "0.52.0"
+  alias(libs.plugins.kotlin.jvm)
+  alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.versions)
 }
 
-group = "com.liquidsoftware"
+group = "io.liquidsoftware"
 version = "1.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
 }
 
-val arrowVersion = "2.1.2"
-
 dependencies {
     // Kotlin Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("org.jetbrains.kotlin:kotlin-reflect:2.2.10")
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlin.reflect)
 
-    implementation(platform("io.arrow-kt:arrow-stack:$arrowVersion"))
-    implementation("io.arrow-kt:arrow-core")
-    implementation("io.arrow-kt:arrow-fx-coroutines")
-    implementation("io.arrow-kt:arrow-resilience")
+    implementation(platform(libs.arrow.stack))
+    implementation(libs.arrow.core)
+    implementation(libs.arrow.fx.coroutines)
+    implementation(libs.arrow.resilience)
 
     // Testing
     testImplementation(kotlin("test"))
-    testImplementation("io.kotest:kotest-runner-junit5:5.8.0")
-    testImplementation("io.kotest:kotest-assertions-core:5.8.0")
-    testImplementation("io.kotest:kotest-framework-engine:5.8.0")
+    testImplementation(libs.kotest.runner.junit5)
+    testImplementation(libs.kotest.assertions.core)
+    testImplementation(libs.kotest.framework.engine)
 }
 
 tasks.test {
@@ -35,6 +33,6 @@ tasks.test {
 }
 
 kotlin {
-    jvmToolchain(23)
+    jvmToolchain(21)
 }
 
