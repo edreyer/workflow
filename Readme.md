@@ -197,13 +197,30 @@ suspend fun processOrder(): Either<WorkflowError, WorkflowResult> {
 }
 ```
 
-If you're already in a coroutine scope, you can execute a use case directly:
+If you’re already in a coroutine scope, you can execute a use case directly:
 
 ```kotlin
 coroutineScope {
   val result = orderProcessingUseCase.execute(initialCommand)
   println(result)
 }
+```
+
+## Publishing to Maven Central
+
+These steps assume you have an approved Sonatype namespace and a Central Portal account.
+
+1) Add credentials to `~/.gradle/gradle.properties`:
+
+```
+centralPortalUsername=YOUR_USERNAME
+centralPortalPassword=YOUR_PASSWORD
+```
+
+2) Publish:
+
+```
+./gradlew publishAllPublicationsToCentralPortal
 ```
 
 ## Core Concepts

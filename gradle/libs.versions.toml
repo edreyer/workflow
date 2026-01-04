@@ -1,9 +1,11 @@
 [versions]
-kotlin = "2.2.20"
+kotlin = "2.3.0"
+kotlin-dokka = "2.1.0"
 kotlinx-coroutines = "1.10.2"
 arrow = "2.2.0"
 kotest = "5.8.0"
 versions-plugin = "0.52.0"
+nmcp = "0.0.7"
 foojay-resolver = "0.8.0"
 jsoup = "1.17.2"
 
@@ -22,5 +24,8 @@ jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "kotlin-dokka" }
+dokka-javadoc = { id = "org.jetbrains.dokka-javadoc", version.ref = "kotlin-dokka" }
 versions = { id = "com.github.ben-manes.versions", version.ref = "versions-plugin" }
+nmcp = { id = "com.gradleup.nmcp", version.ref = "nmcp" }
 foojay-resolver = { id = "org.gradle.toolchains.foojay-resolver-convention", version.ref = "foojay-resolver" }

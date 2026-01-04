@@ -1,11 +1,16 @@
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.dokka)
+  alias(libs.plugins.dokka.javadoc)
   alias(libs.plugins.versions)
+  alias(libs.plugins.nmcp)
+  `maven-publish`
+  signing
 }
 
 group = "io.liquidsoftware"
-version = "1.0-SNAPSHOT"
+version = "0.1.0"
 
 repositories {
     mavenCentral()
@@ -35,4 +40,58 @@ tasks.test {
 
 kotlin {
     jvmToolchain(21)
+}
+
+java {
+    withSourcesJar()
+}
+
+tasks.register<Jar>("javadocJar") {
+    val dokkaJavadoc = tasks.named("dokkaGenerate")
+    dependsOn(dokkaJavadoc)
+    archiveClassifier.set("javadoc")
+    from(dokkaJavadoc.map { it.outputs.files })
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            artifactId = "workflow"
+            from(components["java"])
+            artifact(tasks.named("javadocJar"))
+            pom {
+                name.set("workflow")
+                description.set("A Kotlin workflow DSL for composing use cases.")
+                url.set("https://github.com/edreyer/workflow")
+                licenses {
+                    license {
+                        name.set("MIT License")
+                        url.set("https://opensource.org/licenses/MIT")
+                    }
+                }
+                developers {
+                    developer {
+                        name.set("Erik Dreyer")
+                    }
+                }
+                scm {
+                    url.set("https://github.com/edreyer/workflow")
+                    connection.set("scm:git:git://github.com/edreyer/workflow.git")
+                    developerConnection.set("scm:git:ssh://github.com/edreyer/workflow.git")
+                }
+            }
+        }
+    }
+}
+
+signing {
+    sign(publishing.publications["mavenJava"])
+}
+
+nmcp {
+    publishAllPublications {
+        username = providers.gradleProperty("centralPortalUsername")
+        password = providers.gradleProperty("centralPortalPassword")
+        publicationType = "AUTOMATIC"
+    }
 }
