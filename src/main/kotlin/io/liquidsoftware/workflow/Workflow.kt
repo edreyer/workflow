@@ -64,7 +64,9 @@ abstract class Workflow<I : WorkflowInput, E : Event> {
       { wr -> wr.context.addExecution(execution) }
     )
 
-    return result.map { it.copy(context = updatedContext) }
+    return result
+      .mapLeft { error -> WorkflowError.ExecutionContextError(error, execution) }
+      .map { it.copy(context = updatedContext) }
   }
 }
 

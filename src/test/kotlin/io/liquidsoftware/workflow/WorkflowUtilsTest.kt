@@ -11,6 +11,7 @@ class WorkflowUtilsTest {
 
     // Test data classes
     data class TestCommand(val id: UUID, val name: String) : UseCaseCommand
+    data class EmptyCommand(val unused: String = "x") : UseCaseCommand
     data class TestWorkflowInput(val id: UUID, val name: String) : WorkflowCommand
     data class TestEvent(
         override val id: UUID,
@@ -30,6 +31,7 @@ class WorkflowUtilsTest {
     }
 
     interface HierarchyMarker
+    interface ExtraMarker
 
     abstract class BaseWorkflow<I : WorkflowInput, E : Event>(
         override val id: String
@@ -45,6 +47,19 @@ class WorkflowUtilsTest {
             WorkflowResult(listOf(event))
         }
     }
+
+    class MultiInterfaceWorkflow(id: String) : BaseWorkflow<TestWorkflowInput, TestEvent>(id), ExtraMarker {
+        override suspend fun executeWorkflow(input: TestWorkflowInput): Either<WorkflowError, WorkflowResult> = either {
+            val event = TestEvent(
+                id = UUID.randomUUID(),
+                timestamp = Instant.now(),
+                name = input.name
+            )
+            WorkflowResult(listOf(event))
+        }
+    }
+
+    class NotAWorkflow
 
     @Test
     fun `getWorkflowInputClass should return correct class for workflow`() {
@@ -70,6 +85,25 @@ class WorkflowUtilsTest {
         // Then
         assertNotNull(inputClass)
         assertEquals(TestWorkflowInput::class, inputClass)
+    }
+
+    @Test
+    fun `getWorkflowInputClass should resolve when multiple supertypes exist`() {
+        // Given
+        val workflow = MultiInterfaceWorkflow("test")
+
+        // When
+        val inputClass = WorkflowUtils.getWorkflowInputClass<TestWorkflowInput>(workflow)
+
+        // Then
+        assertNotNull(inputClass)
+        assertEquals(TestWorkflowInput::class, inputClass)
+    }
+
+    @Test
+    fun `getWorkflowInputClass should return null when class is not a workflow`() {
+        val inputClass = WorkflowUtils.getWorkflowInputClass(NotAWorkflow::class)
+        assertNull(inputClass)
     }
 
     @Test
@@ -167,6 +201,53 @@ class WorkflowUtilsTest {
         val input = WorkflowUtils.autoMapInput(result, command, propertyMapping, WorkflowInputWithStringId::class)
 
         // Then - should return null due to type mismatch, which will trigger CompositionError at composition time
+        assertNull(input)
+    }
+
+    @Test
+    fun `autoMapInput should resolve typed mapping from context data`() {
+        // Given
+        data class ContextOnlyInput(val id: UUID) : WorkflowCommand
+        val expectedId = UUID.randomUUID()
+        val result = WorkflowResult(context = WorkflowContext().addData("customerId", expectedId))
+        val command = EmptyCommand()
+        val propertyMapping = PropertyMapping(
+            typedMappings = mapOf(
+                "id" to Key.of<UUID>("customerId")
+            )
+        )
+
+        // When
+        val input = WorkflowUtils.autoMapInput(result, command, propertyMapping, ContextOnlyInput::class)
+
+        // Then
+        assertNotNull(input)
+        assertEquals(expectedId, input?.id)
+    }
+
+    @Test
+    fun `autoMapInput should reject typed event property when type mismatches`() {
+        // Given
+        data class EventWithIntCode(
+            override val id: UUID,
+            override val timestamp: Instant,
+            val code: Int
+        ) : Event
+        data class InputWithStringCode(val code: String) : WorkflowCommand
+
+        val event = EventWithIntCode(UUID.randomUUID(), Instant.now(), 42)
+        val result = WorkflowResult(listOf(event))
+        val command = EmptyCommand()
+        val propertyMapping = PropertyMapping(
+            typedMappings = mapOf(
+                "code" to Key.of<String>("code")
+            )
+        )
+
+        // When
+        val input = WorkflowUtils.autoMapInput(result, command, propertyMapping, InputWithStringCode::class)
+
+        // Then
         assertNull(input)
     }
 

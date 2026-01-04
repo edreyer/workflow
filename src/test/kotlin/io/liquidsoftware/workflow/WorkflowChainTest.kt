@@ -51,8 +51,15 @@ class WorkflowChainTest {
 
     assertTrue(result.isLeft())
     result.fold(
-      { assertTrue(it is ExecutionError) },
-      { fail("Expected Left with ExecutionError but got Right: $it") }
+      { error ->
+        when (error) {
+          is WorkflowError.ChainError -> {
+            assertTrue(error.error is WorkflowError.ExecutionContextError)
+          }
+          else -> fail("Expected ChainError but got ${error::class.simpleName}")
+        }
+      },
+      { fail("Expected Left with ChainError but got Right: $it") }
     )
   }
 
@@ -74,9 +81,14 @@ class WorkflowChainTest {
     result.fold(
       {
         //assertTrue(it is WorkflowError, "Expected WorkflowError but got ${it.javaClass.simpleName}")
-        assertTrue(it is ExecutionError, "Expected ExecutionError but got ${it.javaClass.simpleName}")
+        when (it) {
+          is WorkflowError.ChainError -> {
+            assertTrue(it.error is WorkflowError.ExecutionContextError)
+          }
+          else -> fail("Expected ChainError but got ${it::class.simpleName}")
+        }
       },
-      { fail("Expected Left with ExecutionError but got Right: $it") }
+      { fail("Expected Left with ChainError but got Right: $it") }
     )
   }
 
@@ -96,13 +108,13 @@ class WorkflowChainTest {
     result.fold(
       { error ->
         when (error) {
-          is WorkflowError.ExecutionError -> {
-            assertTrue(error.message.contains("ExceptionError"))
+          is WorkflowError.ChainError -> {
+            assertTrue(error.error is WorkflowError.ExecutionContextError)
           }
-          else -> fail("Expected ExecutionError but got ${error::class.simpleName}")
+          else -> fail("Expected ChainError but got ${error::class.simpleName}")
         }
       },
-      { fail("Expected Left with ExceptionError but got Right: $it") }
+      { fail("Expected Left with ChainError but got Right: $it") }
     )
   }
 
@@ -122,9 +134,14 @@ class WorkflowChainTest {
     result.fold(
       {
         //assertTrue(it is WorkflowError, "Expected WorkflowError but got ${it.javaClass.simpleName}")
-        assertTrue(it is ExecutionError, "Expected ExecutionError but got ${it.javaClass.simpleName}")
+        when (it) {
+          is WorkflowError.ChainError -> {
+            assertTrue(it.error is WorkflowError.ExecutionContextError)
+          }
+          else -> fail("Expected ChainError but got ${it::class.simpleName}")
+        }
       },
-      { fail("Expected Left with ExecutionError but got Right: $it") }
+      { fail("Expected Left with ChainError but got Right: $it") }
     )
   }
 
@@ -507,8 +524,8 @@ class WorkflowChainTest {
 
     assertTrue(result.isLeft())
     result.fold(
-      { assertTrue(it is ExecutionError) },
-      { fail("Expected Left with ExecutionError but got Right: $it") }
+      { assertTrue(it is WorkflowError.ExecutionContextError) },
+      { fail("Expected Left with ExecutionContextError but got Right: $it") }
     )
   }
 }

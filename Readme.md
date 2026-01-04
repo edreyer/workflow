@@ -51,6 +51,8 @@
         * [ExecutionError](#executionerror)
         * [ExceptionError](#exceptionerror)
         * [CompositionError](#compositionerror)
+        * [ExecutionContextError](#executioncontexterror)
+        * [ChainError](#chainerror)
       * [Global Error Handling Strategies](#global-error-handling-strategies)
         * [Error Propagation](#error-propagation)
         * [Error Transformation](#error-transformation)
@@ -142,7 +144,7 @@ accomplish this.
 ### Comprehensive Execution Context
 - **Metadata Collection**: Automatically track execution timing, workflow IDs, and success status
 - **Context Sharing**: Share non-domain data between workflows through the WorkflowContext
-- **Execution History**: Maintain a complete audit trail of all executed workflows within a use case
+- **Execution History**: Maintain a complete audit trail of all executed workflows within a use case (including failure metadata via ExecutionContextError)
 
 ### Robust Error Handling
 - **Exception-Free Operation**: Never throws exceptions; all errors are returned as typed Either values
@@ -537,6 +539,86 @@ Error handling in workflow-based applications requires careful consideration. Th
     - Provide clear diagnostics to help identify the composition problem
     - Consider static analysis tools to catch these at compile time
     - **Type mismatches**: Review property mapping configurations and ensure source/target type compatibility
+
+##### ExecutionContextError
+
+- **Purpose**: Adds execution metadata to a failure, including timing and workflow identifiers
+- **When to use**: Automatically returned when a workflow fails, regardless of the underlying error type
+- **Characteristics**:
+    - Wraps the original `WorkflowError`
+    - Contains a `WorkflowExecution` with start/end time and success status
+    - Useful for logging and diagnostics on failures
+- **Handling strategy**:
+    - Log with the embedded execution metadata for better operational visibility
+    - Preserve the wrapped error for user-facing or domain-specific handling
+
+##### ChainError
+
+- **Purpose**: Indicates an error occurred at the start of a composed use case chain
+- **When to use**: Automatically returned when the initial workflow in a use case fails
+- **Characteristics**:
+    - Wraps the original `WorkflowError` (often `ExecutionContextError`)
+    - Preserves the original error for structured inspection
+- **Handling strategy**:
+    - Inspect `error.error` to access the root cause
+    - Treat as a chain-level failure and stop further processing
+
+##### Error Handling Examples
+
+```kotlin
+when (val result = runBlocking { useCase.execute(command) }) {
+  is Either.Right -> println("Success with ${result.value.events.size} events")
+  is Either.Left -> when (val error = result.value) {
+    is WorkflowError.ChainError -> {
+      val root = error.error
+      println("Chain failed: $root")
+    }
+    is WorkflowError.ExecutionContextError -> {
+      val exec = error.execution
+      println("Workflow ${exec.workflowId} failed after ${exec.endTime} with ${error.error}")
+    }
+    else -> println("Unhandled error: $error")
+  }
+}
+```
+
+##### Failure Behavior
+
+Failures never return a `WorkflowResult`. Instead, they return a `WorkflowError` that may include execution metadata:
+
+- `ExecutionContextError` contains timing and workflow identifiers for the failed step
+- `ChainError` wraps failures from the initial workflow in a composed use case
+
+##### Logging Execution Timing
+
+```kotlin
+val result = runBlocking { useCase.execute(command) }
+result.fold(
+  { error ->
+    if (error is WorkflowError.ExecutionContextError) {
+      val exec = error.execution
+      val durationMs = java.time.Duration.between(exec.startTime, exec.endTime).toMillis()
+      println("Workflow ${exec.workflowId} failed in ${durationMs}ms: ${error.error}")
+    }
+  },
+  { success -> println("Workflow completed in ${success.context.executions.size} steps") }
+)
+```
+
+##### Logging Chain Failures
+
+```kotlin
+val result = runBlocking { useCase.execute(command) }
+result.fold(
+  { error ->
+    if (error is WorkflowError.ChainError) {
+      val root = error.error
+      println("Use case failed at the initial workflow: $root")
+    }
+  },
+  { success -> println("Use case succeeded with ${success.events.size} events") }
+)
+```
 
 #### Global Error Handling Strategies
 

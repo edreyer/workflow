@@ -20,6 +20,8 @@ sealed class WorkflowError {
   data class ExecutionError(val message: String) : WorkflowError()
   data class ExceptionError(val message: String, val ex: Throwable) : WorkflowError()
   data class CompositionError(val message: String, val ex: Throwable) : WorkflowError()
+  data class ExecutionContextError(val error: WorkflowError, val execution: WorkflowExecution) : WorkflowError()
+  data class ChainError(val error: WorkflowError) : WorkflowError()
 }
 
 data class WorkflowResult(

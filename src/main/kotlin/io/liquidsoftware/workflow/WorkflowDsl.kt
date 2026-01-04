@@ -38,7 +38,7 @@ fun <UCC : UseCaseCommand> useCase(
  * the initial workflow and subsequent workflows in the chain.
  */
 class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
-  private var initialWorkflow: Workflow<*, *>? = null
+  private var initialWorkflowExecutor: (suspend (WorkflowInput) -> Either<WorkflowError, WorkflowResult>)? = null
   private var initialWorkflowInputClass: KClass<out WorkflowInput>? = null
   private var initialPropertyMapping: PropertyMapping = PropertyMapping.EMPTY
   private var firstCalled = false
@@ -73,8 +73,11 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     if (otherMethodCalled) {
       throw IllegalStateException("first() method must be the first method called")
     }
-    initialWorkflow = workflow
-    initialWorkflowInputClass = WorkflowUtils.getWorkflowInputClass(workflow)
+    val inputClass = WorkflowUtils.getWorkflowInputClass<WFI>(workflow)
+    initialWorkflowInputClass = inputClass
+    initialWorkflowExecutor = inputClass?.let { klass ->
+      { input -> workflow.execute(klass.cast(input)) }
+    }
     initialPropertyMapping = propertyMapping
     firstCalled = true
   }
@@ -210,19 +213,19 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     val that = this
     return object : UseCase<UCC>() {
       override suspend fun execute(command: UCC): Either<WorkflowError, WorkflowResult> = either {
-        val workflow = that.initialWorkflow ?: raise(
-          CompositionError(
-            "Initial workflow not set",
-            IllegalStateException("Initial workflow not set")
-          )
-        )
-        val initialInputClass = that.initialWorkflowInputClass ?: WorkflowUtils.getWorkflowInputClass<WorkflowInput>(workflow)
+        val initialInputClass = that.initialWorkflowInputClass
           ?: raise(
             CompositionError(
               "Cannot determine input type for initial workflow",
               IllegalArgumentException("Cannot determine input type")
             )
           )
+        val executor = that.initialWorkflowExecutor ?: raise(
+          CompositionError(
+            "Initial workflow not set",
+            IllegalStateException("Initial workflow not set")
+          )
+        )
 
         // Create an empty initial result for auto-mapping
         val emptyResult = WorkflowResult()
@@ -237,11 +240,11 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
           )
 
         // Execute the initial workflow
-        val initialResult = executeInitialWorkflow(workflow, initialInputClass.cast(initialWorkflowInput))
+        val initialResult = executor(initialWorkflowInput)
 
         // Execute the rest of the workflow chain
         return initialResult
-          .mapLeft { error -> ExecutionError("Initial workflow failed: $error") }
+          .mapLeft { error -> WorkflowError.ChainError(error) }
           .flatMap { result ->
             either {
               builders.fold<BaseWorkflowChainBuilder<UCC, WorkflowInput, Event>, Either<WorkflowError, WorkflowResult>>(
@@ -256,13 +259,6 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     }
   }
 
-  @Suppress("UNCHECKED_CAST")
-  private suspend fun executeInitialWorkflow(
-    workflow: Workflow<*, *>,
-    input: WorkflowInput
-  ): Either<WorkflowError, WorkflowResult> {
-    return (workflow as Workflow<WorkflowInput, Event>).execute(input)
-  }
 }
 
 internal abstract class BuiltWorkflow<UCC : UseCaseCommand, I : WorkflowInput, E : Event> {
@@ -315,8 +311,18 @@ object WorkflowUtils {
    */
   @Suppress("UNCHECKED_CAST")
   fun <C : WorkflowInput> getWorkflowInputClass(workflow: Workflow<*, *>): KClass<C>? {
-    val inputType = findWorkflowInputType(workflow::class, emptyMap()) ?: return null
-    return inputType.classifier as? KClass<C>
+    return getWorkflowInputClass(workflow::class) as? KClass<C>
+  }
+
+  /**
+   * Determines the input type class for a workflow class (or returns null when missing).
+   */
+  fun getWorkflowInputClass(workflowClass: KClass<*>): KClass<out WorkflowInput>? {
+    val inputType = findWorkflowInputType(workflowClass, emptyMap()) ?: return null
+    val classifier = inputType.classifier as? KClass<*> ?: return null
+    if (!WorkflowInput::class.java.isAssignableFrom(classifier.java)) return null
+    @Suppress("UNCHECKED_CAST")
+    return classifier as KClass<out WorkflowInput>
   }
   /**
    * Maps properties from various sources to create a workflow input with type-safe validation
