@@ -53,6 +53,10 @@
         * [CompositionError](#compositionerror)
         * [ExecutionContextError](#executioncontexterror)
         * [ChainError](#chainerror)
+        * [Error Handling Examples](#error-handling-examples)
+        * [Failure Behavior](#failure-behavior)
+        * [Logging Execution Timing](#logging-execution-timing)
+        * [Logging Chain Failures](#logging-chain-failures)
       * [Global Error Handling Strategies](#global-error-handling-strategies)
         * [Error Propagation](#error-propagation)
         * [Error Transformation](#error-transformation)
@@ -101,13 +105,13 @@ easier to reason about.
 
 ## Why It Exists
 
-See the figure below. This is an example of the business services used by a typical java/kotlin application. Notice the
+See the figure below. This is an example of the business services used by a typical Java/Kotlin application. Notice the
 dependency lines. Over time, as applications become more complex, the number of services grows, and the lines
 connecting them tends to grow into a rats nest despite the best efforts of teams to avoid this.
 This problem is simply inherent in this structure.
 
 Additionally, the logic for each business use case is distributed across these services. When asked what the app does
-for any use case, we must go spelunking into the codebase and trace call hierarchies to see all the things that ]
+for any use case, we must go spelunking into the codebase and trace call hierarchies to see all the things that
 happen to satisfy each use case. **The use cases are effectively implicit**.
 
 Business logic tends to get more complex over time. This complexity often forces us to introduce new tightly
@@ -139,7 +143,7 @@ accomplish this.
 ### Intelligent Data Mapping
 - **Automatic Property Mapping**: Connect outputs from one workflow to inputs of the next with minimal configuration
 - **Custom Property Mapping**: Use property maps or the builder pattern for explicit control over data transformation
-- **Type-Safe Transformation**: Ensure data compatibility between workflow steps at compile time
+- **Type-Safe Transformation**: Validate data compatibility between workflow steps at runtime
 
 ### Comprehensive Execution Context
 - **Metadata Collection**: Automatically track execution timing, workflow IDs, and success status
@@ -147,7 +151,7 @@ accomplish this.
 - **Execution History**: Maintain a complete audit trail of all executed workflows within a use case (including failure metadata via ExecutionContextError)
 
 ### Robust Error Handling
-- **Exception-Free Operation**: Never throws exceptions; all errors are returned as typed Either values
+- **Exception-Free Execution**: Workflow execution returns typed Either values; DSL misuse throws configuration errors
 - **Granular Error Types**: Distinguish between validation errors, execution errors, and unexpected exceptions
 - **Short-Circuit Execution**: Automatically stop the workflow chain when an error occurs
 - **Predictable Control Flow**: Make error paths explicit with algebraic data types rather than exceptions
@@ -188,8 +192,17 @@ Here's how it looks to construct and execute a use case:
   }
 
 
-val result: Either<WorkflowError, WorkflowResult> = runBlocking { 
-  orderProcessingUseCase.execute(initialCommand) 
+suspend fun processOrder(): Either<WorkflowError, WorkflowResult> {
+  return orderProcessingUseCase.execute(initialCommand)
+}
+```
+
+If you're already in a coroutine scope, you can execute a use case directly:
+
+```kotlin
+coroutineScope {
+  val result = orderProcessingUseCase.execute(initialCommand)
+  println(result)
 }
 ```
 
@@ -565,8 +578,10 @@ Error handling in workflow-based applications requires careful consideration. Th
 
 ##### Error Handling Examples
 
+The snippets below assume a suspend context (e.g., inside a suspend function or coroutine scope).
+
 ```kotlin
-when (val result = runBlocking { useCase.execute(command) }) {
+when (val result = useCase.execute(command)) {
   is Either.Right -> println("Success with ${result.value.events.size} events")
   is Either.Left -> when (val error = result.value) {
     is WorkflowError.ChainError -> {
@@ -591,8 +606,10 @@ Failures never return a `WorkflowResult`. Instead, they return a `WorkflowError`
 
 ##### Logging Execution Timing
 
+Assumes a suspend context.
+
 ```kotlin
-val result = runBlocking { useCase.execute(command) }
+val result = useCase.execute(command)
 result.fold(
   { error ->
     if (error is WorkflowError.ExecutionContextError) {
@@ -607,8 +624,10 @@ result.fold(
 
 ##### Logging Chain Failures
 
+Assumes a suspend context.
+
 ```kotlin
-val result = runBlocking { useCase.execute(command) }
+val result = useCase.execute(command)
 result.fold(
   { error ->
     if (error is WorkflowError.ChainError) {
@@ -627,7 +646,7 @@ result.fold(
 The Workflow framework uses Arrow's `Either` type to represent success or failure outcomes. This enables:
 
 - **Short-circuiting**: When any workflow in a chain fails, subsequent workflows are not executed
-- **Error preservation**: The original error context is maintained throughout the chain
+- **Error preservation**: The original error is preserved and may be wrapped (e.g., `ChainError`)
 - **Type safety**: Errors are handled in a type-safe manner
 
 ##### Error Transformation
@@ -658,6 +677,8 @@ Design workflows with error recovery in mind:
 - **Audit errors**: Log errors consistently to enable error pattern analysis
 
 #### Code Examples
+
+The snippets below assume a suspend context (e.g., inside a suspend function or coroutine scope).
 
 ##### ValidationError Example
 
