@@ -81,6 +81,32 @@ class WorkflowChainTest {
   }
 
   @Test
+  fun `should surface initial workflow exception error instead of masking it`() {
+    val initialWorkflow = ThrowingWorkflow("T")
+
+    val useCase: UseCase<TestUseCaseCommand> = useCase {
+      first(workflow = initialWorkflow)
+      build()
+    }
+
+    val input = TestUseCaseCommand(UUID.randomUUID())
+    val result = runBlocking { useCase.execute(input) }
+
+    assertTrue(result.isLeft())
+    result.fold(
+      { error ->
+        when (error) {
+          is WorkflowError.ExecutionError -> {
+            assertTrue(error.message.contains("ExceptionError"))
+          }
+          else -> fail("Expected ExecutionError but got ${error::class.simpleName}")
+        }
+      },
+      { fail("Expected Left with ExceptionError but got Right: $it") }
+    )
+  }
+
+  @Test
   fun `should not execute next workflow if inputMapper throws`() {
     val initialWorkflow = ThrowingWorkflow("T")
 
@@ -247,6 +273,57 @@ class WorkflowChainTest {
 
     // Check if the workflows were executed in parallel (total time should be less than the sum of individual delays)
     assertTrue(endTime - startTime < 2000L)
+  }
+
+  @Test
+  fun `should preserve all executions from parallel results`() {
+    val initialWorkflow = TestWorkflow("Init")
+    val firstParallel = WorkflowWithExtraExecutions("P1", listOf("P1-extra-1", "P1-extra-2"))
+    val secondParallel = WorkflowWithExtraExecutions("P2", listOf("P2-extra-1"))
+
+    val useCase: UseCase<TestUseCaseCommand> = useCase {
+      first(workflow = initialWorkflow)
+      parallel {
+        this.then(firstParallel)
+        this.then(secondParallel)
+      }
+      build()
+    }
+
+    val input = TestUseCaseCommand(UUID.randomUUID())
+    val result = runBlocking { useCase.execute(input) }
+
+    assertTrue(result is Either.Right<WorkflowResult>)
+    val executions = (result as Either.Right<WorkflowResult>).value.context.executions
+    assertEquals(6, executions.size)
+    assertEquals(
+      listOf("Init", "P1-extra-1", "P1-extra-2", "P1", "P2-extra-1", "P2"),
+      executions.map { it.workflowId }
+    )
+  }
+
+  @Test
+  fun `should not add executions or events when parallel predicates are false`() {
+    val initialWorkflow = TestWorkflow("A")
+    val secondWorkflow = TestWorkflow("B")
+    val thirdWorkflow = TestWorkflow("C")
+
+    val useCase: UseCase<TestUseCaseCommand> = useCase {
+      first(workflow = initialWorkflow)
+      parallel {
+        thenIf(secondWorkflow, { _ -> false })
+        thenIf(thirdWorkflow, { _ -> false })
+      }
+      build()
+    }
+
+    val input = TestUseCaseCommand(UUID.randomUUID())
+    val result = runBlocking { useCase.execute(input) }
+
+    assertTrue(result is Either.Right<WorkflowResult>)
+    assertEquals(1, (result as Either.Right<WorkflowResult>).value.events.size)
+    val executions = result.value.context.executions
+    assertEquals(1, executions.size)
   }
 
   @Test
@@ -475,5 +552,26 @@ class DelayedWorkflow(override val id: String) : Workflow<TestCommand, TestEvent
     val event = TestEvent(input.id, Instant.now())
     val newContext = WorkflowContext().addData("id", this.id)
     return Either.Right(WorkflowResult(listOf(event), newContext))
+  }
+}
+
+class WorkflowWithExtraExecutions(
+  override val id: String,
+  private val executionIds: List<String>
+) : Workflow<TestCommand, TestEvent>() {
+  override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
+    val baseContext = executionIds.fold(WorkflowContext()) { acc, execId ->
+      acc.addExecution(
+        WorkflowExecution(
+          workflowName = "WorkflowWithExtraExecutions",
+          workflowId = execId,
+          startTime = Instant.EPOCH,
+          endTime = Instant.EPOCH,
+          succeeded = true
+        )
+      )
+    }
+    val event = TestEvent(input.id, Instant.now())
+    return Either.Right(WorkflowResult(listOf(event), baseContext))
   }
 }

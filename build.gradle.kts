@@ -20,6 +20,7 @@ dependencies {
     implementation(libs.arrow.core)
     implementation(libs.arrow.fx.coroutines)
     implementation(libs.arrow.resilience)
+    implementation(libs.jsoup)
 
     // Testing
     testImplementation(kotlin("test"))
@@ -35,4 +36,3 @@ tasks.test {
 kotlin {
     jvmToolchain(21)
 }
-

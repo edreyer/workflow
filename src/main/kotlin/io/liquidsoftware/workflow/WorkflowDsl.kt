@@ -11,6 +11,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlin.reflect.KClass
 import kotlin.reflect.KParameter
+import kotlin.reflect.KType
+import kotlin.reflect.KTypeParameter
+import kotlin.reflect.full.cast
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 
@@ -35,19 +38,11 @@ fun <UCC : UseCaseCommand> useCase(
  * the initial workflow and subsequent workflows in the chain.
  */
 class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
-  private var initialWorkflow: Workflow<WorkflowInput, Event>? = null
-  private var initialWorkflowMapper: ((UCC) -> WorkflowInput)? = null
+  private var initialWorkflow: Workflow<*, *>? = null
+  private var initialWorkflowInputClass: KClass<out WorkflowInput>? = null
   private var initialPropertyMapping: PropertyMapping = PropertyMapping.EMPTY
   private var firstCalled = false
   private var otherMethodCalled = false
-  private var _command: UCC? = null
-
-  /**
-   * Access to the current command being processed
-   * @throws IllegalStateException if accessed before command is initialized
-   */
-  val command: UCC
-    get() = _command ?: throw IllegalStateException("Command not initialized")
 
   // Collection of workflow chain builders
   private val builders = mutableListOf<BaseWorkflowChainBuilder<UCC, WorkflowInput, Event>>()
@@ -78,10 +73,9 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
     if (otherMethodCalled) {
       throw IllegalStateException("first() method must be the first method called")
     }
-    @Suppress("UNCHECKED_CAST")
-    initialWorkflow = workflow as Workflow<WorkflowInput, Event>
+    initialWorkflow = workflow
+    initialWorkflowInputClass = WorkflowUtils.getWorkflowInputClass(workflow)
     initialPropertyMapping = propertyMapping
-    initialWorkflowMapper = null
     firstCalled = true
   }
 
@@ -215,59 +209,59 @@ class WorkflowChainBuilderFactory<UCC : UseCaseCommand> {
 
     val that = this
     return object : UseCase<UCC>() {
-      override suspend fun execute(ucCommand: UCC): Either<WorkflowError, WorkflowResult> = either {
-        that._command = ucCommand
+      override suspend fun execute(command: UCC): Either<WorkflowError, WorkflowResult> = either {
         val workflow = that.initialWorkflow ?: raise(
           CompositionError(
             "Initial workflow not set",
             IllegalStateException("Initial workflow not set")
           )
         )
+        val initialInputClass = that.initialWorkflowInputClass ?: WorkflowUtils.getWorkflowInputClass<WorkflowInput>(workflow)
+          ?: raise(
+            CompositionError(
+              "Cannot determine input type for initial workflow",
+              IllegalArgumentException("Cannot determine input type")
+            )
+          )
 
         // Create an empty initial result for auto-mapping
         val emptyResult = WorkflowResult()
 
         // Determine the initial workflow input
-        val initialWorkflowInput = if (that.initialWorkflowMapper != null) {
-          // Use explicit mapper if provided
-          that.initialWorkflowMapper!!(ucCommand)
-        } else {
-          // Use auto-mapping
-          @Suppress("UNCHECKED_CAST")
-          val inputClass = WorkflowUtils.getWorkflowInputClass<WorkflowInput>(workflow)
-            ?: raise(
-              CompositionError(
-                "Cannot determine input type for initial workflow",
-                IllegalArgumentException("Cannot determine input type")
-              )
+        val initialWorkflowInput = WorkflowUtils.autoMapInput(emptyResult, command, that.initialPropertyMapping, initialInputClass)
+          ?: raise(
+            CompositionError(
+              "Cannot auto-map to ${initialInputClass.simpleName}",
+              AutoMappingException("Cannot auto-map to ${initialInputClass.simpleName}")
             )
-
-          // Use WorkflowUtils.autoMapInput
-          WorkflowUtils.autoMapInput(emptyResult, ucCommand, that.initialPropertyMapping, inputClass)
-            ?: raise(
-              CompositionError(
-                "Cannot auto-map to ${inputClass.simpleName}",
-                AutoMappingException("Cannot auto-map to ${inputClass.simpleName}")
-              )
-            )
-        }
+          )
 
         // Execute the initial workflow
-        val initialResult = workflow.execute(initialWorkflowInput)
+        val initialResult = executeInitialWorkflow(workflow, initialInputClass.cast(initialWorkflowInput))
 
         // Execute the rest of the workflow chain
         return initialResult
-          .mapLeft { ExecutionError("No workflows found") }
+          .mapLeft { error -> ExecutionError("Initial workflow failed: $error") }
           .flatMap { result ->
             either {
-              builders.fold(result.right() as Either<WorkflowError, WorkflowResult>) { workflowResult, builder ->
+              builders.fold<BaseWorkflowChainBuilder<UCC, WorkflowInput, Event>, Either<WorkflowError, WorkflowResult>>(
+                result.right()
+              ) { workflowResult, builder ->
                 val builtWorkflow = builder.build()
-                builtWorkflow.execute(initialWorkflowInput, workflowResult.bind(), ucCommand)
+                builtWorkflow.execute(initialWorkflowInput, workflowResult.bind(), command)
               }.bind()
             }
           }
       }
     }
+  }
+
+  @Suppress("UNCHECKED_CAST")
+  private suspend fun executeInitialWorkflow(
+    workflow: Workflow<*, *>,
+    input: WorkflowInput
+  ): Either<WorkflowError, WorkflowResult> {
+    return (workflow as Workflow<WorkflowInput, Event>).execute(input)
   }
 }
 
@@ -283,14 +277,47 @@ internal class WorkflowStep<UCC : UseCaseCommand>(
  * Utility functions for workflow operations
  */
 object WorkflowUtils {
+  private fun resolveKotlinType(type: KType, typeVarMap: Map<KTypeParameter, KType>): KType? {
+    val classifier = type.classifier
+    return when (classifier) {
+      is KTypeParameter -> typeVarMap[classifier]?.let { resolveKotlinType(it, typeVarMap) }
+      else -> type
+    }
+  }
+
+  private fun findWorkflowInputType(kclass: KClass<*>, typeVarMap: Map<KTypeParameter, KType>): KType? {
+    for (supertype in kclass.supertypes) {
+      when (val classifier = supertype.classifier) {
+        Workflow::class -> {
+          val inputType = supertype.arguments.firstOrNull()?.type ?: return null
+          return resolveKotlinType(inputType, typeVarMap)
+        }
+        is KClass<*> -> {
+          val params = classifier.typeParameters
+          val args = supertype.arguments
+          val nextMap = typeVarMap.toMutableMap()
+          params.forEachIndexed { index, param ->
+            val argType = args.getOrNull(index)?.type
+            if (argType != null) {
+              nextMap[param] = argType
+            }
+          }
+          val resolved = findWorkflowInputType(classifier, nextMap)
+          if (resolved != null) return resolved
+        }
+      }
+    }
+    return null
+  }
+
   /**
    * Determines the input type class for a workflow
    */
   @Suppress("UNCHECKED_CAST")
   fun <C : WorkflowInput> getWorkflowInputClass(workflow: Workflow<*, *>): KClass<C>? {
-    return workflow.javaClass.kotlin.supertypes[0].arguments[0].type?.classifier as? KClass<C>
+    val inputType = findWorkflowInputType(workflow::class, emptyMap()) ?: return null
+    return inputType.classifier as? KClass<C>
   }
-
   /**
    * Maps properties from various sources to create a workflow input with type-safe validation
    */
@@ -304,32 +331,34 @@ object WorkflowUtils {
     val args = mutableMapOf<KParameter, Any?>()
 
     for (param in constructor.parameters) {
+        val paramName = param.name
+        val sourceKey = paramName?.let { propertyMapping.typedMappings[it] }
         val value = when {
-            // Check for typed mapping
-            propertyMapping.typedMappings.containsKey(param.name) -> {
-                val sourceKey = propertyMapping.typedMappings[param.name]!!
-                val expectedType = param.type.classifier as? KClass<*>
-                val sourceType = sourceKey.type
+          // Check for typed mapping
+          sourceKey != null -> {
+              val expectedType = param.type.classifier as? KClass<*>
+              val sourceType = sourceKey.type
 
-                // Validate type compatibility before looking for value
-                if (expectedType != null && expectedType != sourceType) {
-                    // Type mismatch - this will be handled at composition time
-                    return null
-                }
+              // Validate type compatibility before looking for value
+              if (expectedType != null && expectedType != sourceType) {
+                  // Type mismatch - this will be handled at composition time
+                  return null
+              }
 
-                findTypedValue(result, command, sourceKey)
-            }
+              findTypedValue(result, command, sourceKey)
+          }
 
-            // Default to parameter name with type checking
-            else -> {
-                val expectedType = param.type.classifier as? KClass<*>
-                findValue(result, command, param.name ?: "", expectedType)
-            }
+          // Default to parameter name with type checking
+          else -> {
+              val expectedType = param.type.classifier as? KClass<*>
+              paramName?.let { name -> findValue(result, command, name, expectedType) }
+          }
         }
 
         when {
             value != null -> args[param] = value
-            param.isOptional -> args[param] = null
+            param.isOptional -> Unit // Allow default value to be used
+            param.type.isMarkedNullable -> args[param] = null
             else -> return null // Cannot satisfy required parameter
         }
     }
@@ -522,7 +551,9 @@ internal class SequentialWorkflowChainBuilder<UCC : UseCaseCommand, I : Workflow
   override fun build(): BuiltWorkflow<UCC, I, E> {
     return object : BuiltWorkflow<UCC, I, E>() {
       override suspend fun execute(input: I, result: WorkflowResult, command: UCC): Either<WorkflowError, WorkflowResult> {
-        return workflows.fold(result.right() as Either<WorkflowError, WorkflowResult>) { currentResult, workflow ->
+        return workflows.fold<WorkflowStep<UCC>, Either<WorkflowError, WorkflowResult>>(
+          result.right()
+        ) { currentResult, workflow ->
           when (currentResult) {
             is Either.Right -> {
               val resultValue = currentResult.value
@@ -575,12 +606,20 @@ internal class ParallelWorkflowChainBuilder<UCC : UseCaseCommand, I : WorkflowIn
           }
         }
         val results = deferredResults.awaitAll()
-
-        val newExecutions = results.fold(result.context.executions) { acc, newResult ->
-          acc + newResult.fold({ emptyList() }, { listOf(it.context.executions.last()) })
+        val filteredResults = results.filter { newResult ->
+          newResult is Either.Left || (newResult is Either.Right && newResult.value !== result)
         }
 
-        val combinedResult = results.fold(result.right() as Either<WorkflowError, WorkflowResult>) { acc, newResult ->
+        val newExecutions = filteredResults.fold(result.context.executions) { acc, newResult ->
+          newResult.fold(
+            { acc },
+            { acc + it.context.executions }
+          )
+        }
+
+        val combinedResult = filteredResults.fold<Either<WorkflowError, WorkflowResult>, Either<WorkflowError, WorkflowResult>>(
+          result.right()
+        ) { acc, newResult ->
           acc.flatMap { accResult ->
             newResult.map { it.combine(accResult) }
           }

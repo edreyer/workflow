@@ -29,10 +29,40 @@ class WorkflowUtilsTest {
         }
     }
 
+    interface HierarchyMarker
+
+    abstract class BaseWorkflow<I : WorkflowInput, E : Event>(
+        override val id: String
+    ) : Workflow<I, E>(), HierarchyMarker
+
+    class DerivedWorkflow(id: String) : BaseWorkflow<TestWorkflowInput, TestEvent>(id) {
+        override suspend fun executeWorkflow(input: TestWorkflowInput): Either<WorkflowError, WorkflowResult> = either {
+            val event = TestEvent(
+                id = UUID.randomUUID(),
+                timestamp = Instant.now(),
+                name = input.name
+            )
+            WorkflowResult(listOf(event))
+        }
+    }
+
     @Test
     fun `getWorkflowInputClass should return correct class for workflow`() {
         // Given
         val workflow = TestWorkflow("test")
+
+        // When
+        val inputClass = WorkflowUtils.getWorkflowInputClass<TestWorkflowInput>(workflow)
+
+        // Then
+        assertNotNull(inputClass)
+        assertEquals(TestWorkflowInput::class, inputClass)
+    }
+
+    @Test
+    fun `getWorkflowInputClass should resolve through base class hierarchy`() {
+        // Given
+        val workflow = DerivedWorkflow("test")
 
         // When
         val inputClass = WorkflowUtils.getWorkflowInputClass<TestWorkflowInput>(workflow)
@@ -138,5 +168,23 @@ class WorkflowUtilsTest {
 
         // Then - should return null due to type mismatch, which will trigger CompositionError at composition time
         assertNull(input)
+    }
+
+    @Test
+    fun `autoMapInput should use default values for optional constructor params`() {
+        // Given - workflow input with a default value for name
+        data class CommandWithIdOnly(val id: UUID) : UseCaseCommand
+        data class InputWithDefault(val id: UUID, val name: String = "default-name") : WorkflowCommand
+
+        val command = CommandWithIdOnly(UUID.randomUUID())
+        val result = WorkflowResult()
+
+        // When
+        val input = WorkflowUtils.autoMapInput(result, command, PropertyMapping.EMPTY, InputWithDefault::class)
+
+        // Then
+        assertNotNull(input)
+        assertEquals(command.id, input?.id)
+        assertEquals("default-name", input?.name)
     }
 }

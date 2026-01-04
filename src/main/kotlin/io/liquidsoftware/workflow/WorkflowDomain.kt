@@ -55,8 +55,14 @@ data class WorkflowContext(
     return copy(data = newData)
   }
 
-  inline fun <reified T> getTypedData(key: String, default: T? = null): T? =
-    data[key] as T? ?: default
+  /**
+   * Retrieves typed data from context with type safety.
+   * @return The value if present and matches type T, otherwise the default value
+   */
+  inline fun <reified T> getTypedData(key: String, default: T? = null): T? {
+    val value = data[key]
+    return if (value is T) value else default
+  }
 
   fun combine(other: WorkflowContext): WorkflowContext {
     val combinedData = data + other.data
