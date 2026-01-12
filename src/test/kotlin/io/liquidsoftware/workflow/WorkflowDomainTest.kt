@@ -6,6 +6,8 @@ import java.time.Instant
 import java.util.UUID
 
 class WorkflowDomainTest {
+    data class TestState(val name: String) : WorkflowState
+    data class TestEvent(override val id: UUID, override val timestamp: Instant) : Event
 
     @Test
     fun `should add and retrieve data from WorkflowContext`() {
@@ -55,10 +57,10 @@ class WorkflowDomainTest {
         val event1 = TestEvent(UUID.randomUUID(), Instant.now())
         val event2 = TestEvent(UUID.randomUUID(), Instant.now())
 
-        val result1 = WorkflowResult(listOf(event1), WorkflowContext().addData("key1", "value1"))
-        val result2 = WorkflowResult(listOf(event2), WorkflowContext().addData("key2", "value2"))
+        val result1 = WorkflowResult(TestState("one"), listOf(event1), WorkflowContext().addData("key1", "value1"))
+        val result2 = WorkflowResult(TestState("two"), listOf(event2), WorkflowContext().addData("key2", "value2"))
 
-        val combined = result1.combine(result2)
+        val combined = result2.mergePrevious(result1)
 
         assertEquals(2, combined.events.size)
         assertEquals(event1.id, combined.events[0].id)
@@ -71,7 +73,7 @@ class WorkflowDomainTest {
     fun `should get property from event using getFromEvent`() {
         val eventId = UUID.randomUUID()
         val event = TestEvent(eventId, Instant.now())
-        val result = WorkflowResult(listOf(event))
+        val result = WorkflowResult(TestState("state"), listOf(event))
 
         val retrievedId = result.getFromEvent(TestEvent::id)
         assertEquals(eventId, retrievedId)
@@ -80,4 +82,3 @@ class WorkflowDomainTest {
         assertNotNull(nonExistentProperty)
     }
 }
-

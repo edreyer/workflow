@@ -4,9 +4,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.reflect.KProperty1
 
-interface WorkflowInput
-interface WorkflowCommand : WorkflowInput
-interface WorkflowQuery : WorkflowInput
+interface WorkflowState
 
 interface UseCaseCommand
 
@@ -14,6 +12,8 @@ interface Event {
   val id: UUID
   val timestamp: Instant
 }
+
+data class UseCaseEvents(val events: List<Event>)
 
 sealed class WorkflowError {
   data class ValidationError(val message: String) : WorkflowError()
@@ -24,7 +24,8 @@ sealed class WorkflowError {
   data class ChainError(val error: WorkflowError) : WorkflowError()
 }
 
-data class WorkflowResult(
+data class WorkflowResult<out S : WorkflowState>(
+  val state: S,
   val events: List<Event> = emptyList(),
   val context: WorkflowContext = WorkflowContext()
 ) {
@@ -33,11 +34,14 @@ data class WorkflowResult(
     events.filterIsInstance<T>().firstOrNull()
       ?.let { event -> property.get(event) }
 
-  fun combine(other: WorkflowResult): WorkflowResult {
-    val combinedContext = this.context.combine(other.context)
-    val combinedEvents = this.events + other.events
-    return WorkflowResult(combinedEvents, combinedContext)
+  fun mergePrevious(previous: WorkflowResult<WorkflowState>): WorkflowResult<S> {
+    val combinedContext = previous.context.combine(context)
+    val combinedEvents = previous.events + events
+    return WorkflowResult(state, combinedEvents, combinedContext)
   }
+
+  @Deprecated("Use mergePrevious instead.")
+  fun combine(other: WorkflowResult<WorkflowState>): WorkflowResult<S> = mergePrevious(other)
 }
 
 data class WorkflowExecution(

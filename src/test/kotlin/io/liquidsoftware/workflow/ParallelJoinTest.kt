@@ -3,14 +3,17 @@ package io.liquidsoftware.workflow
 import arrow.core.Either
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import java.time.Instant
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import java.time.Instant
-import java.util.UUID
 
 class ParallelJoinTest {
-  data class JoinInput(val value: String) : WorkflowInput
+  data class JoinState(val value: String) : WorkflowState
+  data class AlphaState(val value: String, val alpha: String) : WorkflowState
+  data class BetaState(val value: String, val beta: String) : WorkflowState
+  data class MergedState(val value: String, val alpha: String, val beta: String) : WorkflowState
 
   data class AlphaEvent(
     override val id: UUID,
@@ -30,30 +33,25 @@ class ParallelJoinTest {
     val label: String
   ) : Event
 
-  data class MergedEvent(
-    override val id: UUID,
-    override val timestamp: Instant,
-    val label: String
-  ) : Event
-
-  class EmittingWorkflow<E : Event>(
+  class EmittingWorkflow<S : WorkflowState>(
     override val id: String,
-    private val events: List<Event>,
-    private val delayMs: Long = 0L
-  ) : Workflow<JoinInput, E>() {
-    override suspend fun executeWorkflow(input: JoinInput): Either<WorkflowError, WorkflowResult> {
+    private val delayMs: Long = 0L,
+    private val events: List<Event> = emptyList(),
+    private val stateFactory: (JoinState) -> S
+  ) : Workflow<JoinState, S>() {
+    override suspend fun executeWorkflow(input: JoinState): Either<WorkflowError, WorkflowResult<S>> {
       if (delayMs > 0) {
         delay(delayMs)
       }
-      return Either.Right(WorkflowResult(events = events))
+      return Either.Right(WorkflowResult(stateFactory(input), events))
     }
   }
 
-  class FailingWorkflow(
+  class FailingWorkflow<S : WorkflowState>(
     override val id: String,
     private val delayMs: Long = 0L
-  ) : Workflow<JoinInput, AlphaEvent>() {
-    override suspend fun executeWorkflow(input: JoinInput): Either<WorkflowError, WorkflowResult> {
+  ) : Workflow<JoinState, S>() {
+    override suspend fun executeWorkflow(input: JoinState): Either<WorkflowError, WorkflowResult<S>> {
       if (delayMs > 0) {
         delay(delayMs)
       }
@@ -62,75 +60,44 @@ class ParallelJoinTest {
   }
 
   @Test
-  fun `parallelJoin merges events in parameter order and appends merged event`() {
+  fun `parallelJoin merges states and events in parameter order`() {
     val alpha = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
     val extra = ExtraEvent(UUID.randomUUID(), Instant.EPOCH, "extra")
     val beta = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
 
-    val alphaWorkflow = EmittingWorkflow<AlphaEvent>("alpha", listOf(alpha, extra))
-    val betaWorkflow = EmittingWorkflow<BetaEvent>("beta", listOf(beta))
+    val alphaWorkflow = EmittingWorkflow(
+      id = "alpha",
+      events = listOf(alpha, extra)
+    ) { input -> AlphaState(input.value, "alpha") }
+    val betaWorkflow = EmittingWorkflow(
+      id = "beta",
+      events = listOf(beta)
+    ) { input -> BetaState(input.value, "beta") }
 
-    var mergedEvent: MergedEvent? = null
     val join = parallelJoin(alphaWorkflow, betaWorkflow) { a, b ->
-      MergedEvent(UUID.randomUUID(), Instant.EPOCH, "${a.label}-${b.label}").also {
-        mergedEvent = it
-      }
+      MergedState(a.value, a.alpha, b.beta)
     }
 
-    val result = runBlocking { join.execute(JoinInput("ok")) }
+    val result = runBlocking { join.execute(JoinState("ok")) }
 
     assertTrue(result is Either.Right)
-    val events = result.value.events
-    val merged = mergedEvent ?: error("merge was not invoked")
-    assertEquals(listOf(alpha, extra, beta, merged), events)
-    val executions = result.value.context.executions.map { it.workflowId }
+    val right = result.value
+    assertEquals(MergedState("ok", "alpha", "beta"), right.state)
+    assertEquals(listOf(alpha, extra, beta), right.events)
+    val executions = right.context.executions.map { it.workflowId }
     assertEquals(listOf("alpha", "beta", join.id), executions)
   }
 
   @Test
-  fun `parallelJoin fails when required event is missing`() {
-    val alphaWorkflow = EmittingWorkflow<AlphaEvent>("alpha", emptyList())
-    val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
-    val betaWorkflow = EmittingWorkflow<BetaEvent>("beta", listOf(betaEvent))
-
-    val join = parallelJoin(alphaWorkflow, betaWorkflow) { _, _ ->
-      MergedEvent(UUID.randomUUID(), Instant.EPOCH, "merged")
-    }
-
-    val result = runBlocking { join.execute(JoinInput("ok")) }
-
-    assertTrue(result is Either.Left)
-    assertTrue(result.value is WorkflowError.ExecutionContextError)
-  }
-
-  @Test
-  fun `parallelJoin fails when required event appears multiple times`() {
-    val alphaOne = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha-1")
-    val alphaTwo = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha-2")
-    val alphaWorkflow = EmittingWorkflow<AlphaEvent>("alpha", listOf(alphaOne, alphaTwo))
-    val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
-    val betaWorkflow = EmittingWorkflow<BetaEvent>("beta", listOf(betaEvent))
-
-    val join = parallelJoin(alphaWorkflow, betaWorkflow) { _, _ ->
-      MergedEvent(UUID.randomUUID(), Instant.EPOCH, "merged")
-    }
-
-    val result = runBlocking { join.execute(JoinInput("ok")) }
-
-    assertTrue(result is Either.Left)
-    assertTrue(result.value is WorkflowError.ExecutionContextError)
-  }
-
-  @Test
   fun `parallelJoin returns first error by parameter order in WaitAll`() {
-    val slowFailure = FailingWorkflow("first", delayMs = 200L)
-    val fastFailure = FailingWorkflow("second", delayMs = 0L)
+    val slowFailure = FailingWorkflow<AlphaState>("first", delayMs = 200L)
+    val fastFailure = FailingWorkflow<BetaState>("second", delayMs = 0L)
 
     val join = parallelJoin(slowFailure, fastFailure) { _, _ ->
-      MergedEvent(UUID.randomUUID(), Instant.EPOCH, "merged")
+      MergedState("unused", "unused", "unused")
     }
 
-    val result = runBlocking { join.execute(JoinInput("ok")) }
+    val result = runBlocking { join.execute(JoinState("ok")) }
 
     assertTrue(result is Either.Left)
     val error = result.value as WorkflowError.ExecutionContextError
@@ -140,19 +107,19 @@ class ParallelJoinTest {
 
   @Test
   fun `parallelJoin fail-fast cancels slow branch`() {
-    val fastFailure = FailingWorkflow("first", delayMs = 50L)
-    val slowWorkflow = EmittingWorkflow<BetaEvent>(
+    val fastFailure = FailingWorkflow<AlphaState>("first", delayMs = 50L)
+    val slowWorkflow = EmittingWorkflow(
       id = "second",
-      events = listOf(BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")),
-      delayMs = 2000L
-    )
+      delayMs = 2000L,
+      events = listOf(BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta"))
+    ) { input -> BetaState(input.value, "beta") }
 
     val join = parallelJoin(fastFailure, slowWorkflow, ParallelErrorPolicy.FailFast) { _, _ ->
-      MergedEvent(UUID.randomUUID(), Instant.EPOCH, "merged")
+      MergedState("unused", "unused", "unused")
     }
 
     val start = System.currentTimeMillis()
-    val result = runBlocking { join.execute(JoinInput("ok")) }
+    val result = runBlocking { join.execute(JoinState("ok")) }
     val elapsed = System.currentTimeMillis() - start
 
     assertTrue(result is Either.Left)

@@ -10,76 +10,69 @@ import java.util.UUID
 
 class FirstMethodTest {
 
-    // Simple test workflow and command
     data class TestCommand(val id: UUID) : UseCaseCommand
-    data class TestWorkflowInput(val id: UUID) : WorkflowCommand
+    data class TestState(val id: UUID) : WorkflowState
     data class TestEvent(
         override val id: UUID,
         override val timestamp: Instant
     ) : Event
 
-    class TestWorkflow(override val id: String) : Workflow<TestWorkflowInput, TestEvent>() {
-        override suspend fun executeWorkflow(input: TestWorkflowInput): Either<WorkflowError, WorkflowResult> = either {
+    class TestWorkflow(override val id: String) : Workflow<TestState, TestState>() {
+        override suspend fun executeWorkflow(input: TestState): Either<WorkflowError, WorkflowResult<TestState>> = either {
             val event = TestEvent(
                 id = UUID.randomUUID(),
                 timestamp = Instant.now()
             )
-            WorkflowResult(listOf(event))
+            WorkflowResult(input, listOf(event))
         }
     }
 
     @Test
-    fun `first() must be called at least once`() {
-        // Should throw an exception when firstWithAutoMapping() is not called
+    fun `startWith() must be called at least once`() {
         val exception = assertThrows<IllegalStateException> {
             val useCase = useCase<TestCommand> {
-                // No firstWithAutoMapping() call
+                // No startWith() call
             }
 
-            // Trigger the build() method which checks if firstWithAutoMapping() was called
             runBlocking { useCase.execute(TestCommand(UUID.randomUUID())) }
         }
 
-        assert(exception.message?.contains("first() method must be called") == true)
+        assert(exception.message?.contains("startWith() must be called") == true)
     }
 
     @Test
-    fun `first() must be the first method called`() {
-        // Should throw an exception when firstWithAutoMapping() is not the first method called
+    fun `startWith() must be the first method called`() {
         val exception = assertThrows<IllegalStateException> {
             useCase<TestCommand> {
                 this.then(TestWorkflow("test"))
 
-                first(workflow = TestWorkflow("test"))
+                startWith { command -> Either.Right(TestState(command.id)) }
             }
         }
 
-        assert(exception.message?.contains("first() method must be the first method called") == true)
+        assert(exception.message?.contains("startWith() must be the first method called") == true)
     }
 
     @Test
-    fun `first() cannot be called more than once`() {
-        // Should throw an exception when firstWithAutoMapping() is called more than once
+    fun `startWith() cannot be called more than once`() {
         val exception = assertThrows<IllegalStateException> {
             useCase<TestCommand> {
-                first(workflow = TestWorkflow("test1"))
-                first(workflow = TestWorkflow("test2"))
+                startWith { command -> Either.Right(TestState(command.id)) }
+                startWith { command -> Either.Right(TestState(command.id)) }
             }
         }
 
-        assert(exception.message?.contains("first() method can only be called once") == true)
+        assert(exception.message?.contains("startWith() can only be called once") == true)
     }
 
     @Test
-    fun `valid usage of first() method`() {
-        // Should not throw an exception when firstWithAutoMapping() is used correctly
+    fun `valid usage of startWith() method`() {
         val useCase = useCase<TestCommand> {
-            first(workflow = TestWorkflow("test"))
-
-          this.then(TestWorkflow("next"))
+            startWith { command -> Either.Right(TestState(command.id)) }
+            then(TestWorkflow("test"))
+            then(TestWorkflow("next"))
         }
 
-        // Execute the use case to ensure it works
         val result = runBlocking { useCase.execute(TestCommand(UUID.randomUUID())) }
         assert(result.isRight())
     }

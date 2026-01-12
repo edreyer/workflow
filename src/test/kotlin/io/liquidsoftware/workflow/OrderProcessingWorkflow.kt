@@ -27,19 +27,30 @@ fun main() {
   // -------------------------
 
   val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
+    startWith { command ->
+      Either.Right(
+        OrderDraftState(
+          orderId = command.orderId,
+          customerId = command.customerId,
+          items = command.items,
+          totalAmount = command.totalAmount
+        )
+      )
+    }
 
-    first(workflow = ValidateOrderWorkflow("validate-order"))
+    then(ValidateOrderWorkflow("validate-order"))
 
-    // Calculate pricing in parallel and emit a merged pricing event
     then(
       parallelJoin(
         CalculateSubtotalWorkflow("calc-subtotal"),
         CalculateTaxWorkflow("calc-tax"),
       ) { subtotal, tax ->
-        PricingCalculatedEvent(
-          id = UUID.randomUUID(),
-          timestamp = Instant.now(),
+        PricingState(
           orderId = subtotal.orderId,
+          customerId = subtotal.customerId,
+          items = subtotal.items,
+          totalAmount = subtotal.totalAmount,
+          shippingAddress = subtotal.shippingAddress,
           subtotal = subtotal.subtotal,
           tax = tax.tax,
           total = subtotal.subtotal + tax.tax
@@ -47,13 +58,12 @@ fun main() {
       }
     )
 
+    then(EmitPricingWorkflow("emit-pricing"))
+
     // After validation, run inventory check and payment processing in parallel
     parallel {
       then(CheckInventoryWorkflow("check-inventory"))
-      then(ProcessPaymentWorkflow("process-payment")) {
-        "orderId" from Key.of<UUID>("orderId")      // Type-safe UUID mapping
-        "amount" from Key.of<Double>("totalAmount") // Type-safe Double mapping
-      }
+      then(ProcessPaymentWorkflow("process-payment"))
     }
 
     thenIf(
@@ -65,10 +75,7 @@ fun main() {
         }
         result.context.getTypedData<Boolean>("inventoryAvailable") == true && paymentSuccessful
       }
-    ) {
-      // Map from different event fields to the shipment command fields
-      "items" from Key.of<List<OrderItem>>("availableItems") // Type-safe collection mapping
-    }
+    )
   }
 
   // -------------------------
@@ -76,7 +83,7 @@ fun main() {
   // -------------------------
   val initialCommand = ProcessOrderCommand(orderId, customerId, items, totalAmount)
 
-  when (val result = runBlocking { orderProcessingUseCase.execute(initialCommand) } ) {
+  when (val result = runBlocking { orderProcessingUseCase.execute(initialCommand) }) {
     is Either.Right -> {
       println("Order processing completed successfully!")
       result.value.events.sortedBy { it.timestamp }.forEach { event ->
@@ -104,31 +111,54 @@ data class ProcessOrderCommand(
   val customerId: UUID,
   val items: List<OrderItem>,
   val totalAmount: Double
-) : UseCaseCommand, WorkflowCommand
+) : UseCaseCommand
 
-data class ValidateOrderCommand(
+// -------------------------
+// State
+// -------------------------
+data class OrderDraftState(
   val orderId: UUID,
   val customerId: UUID,
   val items: List<OrderItem>,
   val totalAmount: Double
-) : WorkflowCommand
+) : WorkflowState
 
-data class CheckInventoryCommand(
-  val orderId: UUID,
-  val items: List<OrderItem>
-) : WorkflowCommand
-
-data class ProcessPaymentCommand(
+data class ValidatedOrderState(
   val orderId: UUID,
   val customerId: UUID,
-  val amount: Double
-) : WorkflowCommand
+  val items: List<OrderItem>,
+  val totalAmount: Double,
+  val shippingAddress: String
+) : WorkflowState
 
-data class PrepareShipmentCommand(
+data class SubtotalState(
   val orderId: UUID,
+  val customerId: UUID,
+  val items: List<OrderItem>,
+  val totalAmount: Double,
   val shippingAddress: String,
-  val items: List<OrderItem>
-) : WorkflowCommand
+  val subtotal: Double
+) : WorkflowState
+
+data class TaxState(
+  val orderId: UUID,
+  val customerId: UUID,
+  val items: List<OrderItem>,
+  val totalAmount: Double,
+  val shippingAddress: String,
+  val tax: Double
+) : WorkflowState
+
+data class PricingState(
+  val orderId: UUID,
+  val customerId: UUID,
+  val items: List<OrderItem>,
+  val totalAmount: Double,
+  val shippingAddress: String,
+  val subtotal: Double,
+  val tax: Double,
+  val total: Double
+) : WorkflowState
 
 // -------------------------
 // Domain Objects
@@ -201,12 +231,12 @@ data class ShipmentPreparedEvent(
 // Workflow Implementations
 // -------------------------
 
-class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCommand, OrderValidatedEvent>() {
+class ValidateOrderWorkflow(override val id: String) : Workflow<OrderDraftState, ValidatedOrderState>() {
   override suspend fun executeWorkflow(
-    input: ValidateOrderCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: OrderDraftState
+  ): Either<WorkflowError, WorkflowResult<ValidatedOrderState>> = either {
     // Simulate order validation
-    ensure(!input.items.isEmpty()) { WorkflowError.ValidationError("Order must contain at least one item") }
+    ensure(input.items.isNotEmpty()) { WorkflowError.ValidationError("Order must contain at least one item") }
 
     val event = OrderValidatedEvent(
       id = UUID.randomUUID(),
@@ -215,14 +245,23 @@ class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCom
       shippingAddress = "123 Main St", // Simplified for example
       items = input.items
     )
-    WorkflowResult(listOf(event))
+    WorkflowResult(
+      ValidatedOrderState(
+        orderId = input.orderId,
+        customerId = input.customerId,
+        items = input.items,
+        totalAmount = input.totalAmount,
+        shippingAddress = event.shippingAddress
+      ),
+      listOf(event)
+    )
   }
 }
 
-class CalculateSubtotalWorkflow(override val id: String) : Workflow<ProcessOrderCommand, SubtotalCalculatedEvent>() {
+class CalculateSubtotalWorkflow(override val id: String) : Workflow<ValidatedOrderState, SubtotalState>() {
   override suspend fun executeWorkflow(
-    input: ProcessOrderCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: ValidatedOrderState
+  ): Either<WorkflowError, WorkflowResult<SubtotalState>> = either {
     val subtotal = input.items.sumOf { it.quantity * it.price }
     val event = SubtotalCalculatedEvent(
       id = UUID.randomUUID(),
@@ -230,14 +269,24 @@ class CalculateSubtotalWorkflow(override val id: String) : Workflow<ProcessOrder
       orderId = input.orderId,
       subtotal = subtotal
     )
-    WorkflowResult(listOf(event))
+    WorkflowResult(
+      SubtotalState(
+        orderId = input.orderId,
+        customerId = input.customerId,
+        items = input.items,
+        totalAmount = input.totalAmount,
+        shippingAddress = input.shippingAddress,
+        subtotal = subtotal
+      ),
+      listOf(event)
+    )
   }
 }
 
-class CalculateTaxWorkflow(override val id: String) : Workflow<ProcessOrderCommand, TaxCalculatedEvent>() {
+class CalculateTaxWorkflow(override val id: String) : Workflow<ValidatedOrderState, TaxState>() {
   override suspend fun executeWorkflow(
-    input: ProcessOrderCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: ValidatedOrderState
+  ): Either<WorkflowError, WorkflowResult<TaxState>> = either {
     val tax = input.totalAmount * 0.08
     val event = TaxCalculatedEvent(
       id = UUID.randomUUID(),
@@ -245,14 +294,40 @@ class CalculateTaxWorkflow(override val id: String) : Workflow<ProcessOrderComma
       orderId = input.orderId,
       tax = tax
     )
-    WorkflowResult(listOf(event))
+    WorkflowResult(
+      TaxState(
+        orderId = input.orderId,
+        customerId = input.customerId,
+        items = input.items,
+        totalAmount = input.totalAmount,
+        shippingAddress = input.shippingAddress,
+        tax = tax
+      ),
+      listOf(event)
+    )
   }
 }
 
-class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryCommand, InventoryVerifiedEvent>() {
+class EmitPricingWorkflow(override val id: String) : Workflow<PricingState, PricingState>() {
   override suspend fun executeWorkflow(
-    input: CheckInventoryCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: PricingState
+  ): Either<WorkflowError, WorkflowResult<PricingState>> = either {
+    val event = PricingCalculatedEvent(
+      id = UUID.randomUUID(),
+      timestamp = Instant.now(),
+      orderId = input.orderId,
+      subtotal = input.subtotal,
+      tax = input.tax,
+      total = input.total
+    )
+    WorkflowResult(input, listOf(event))
+  }
+}
+
+class CheckInventoryWorkflow(override val id: String) : Workflow<PricingState, PricingState>() {
+  override suspend fun executeWorkflow(
+    input: PricingState
+  ): Either<WorkflowError, WorkflowResult<PricingState>> = either {
     // Simulate inventory check
     delay(1000) // Simulate external service call
 
@@ -264,16 +339,17 @@ class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryC
     )
 
     WorkflowResult(
+      input,
       listOf(event),
       WorkflowContext().addData("inventoryAvailable", true)
     )
   }
 }
 
-class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentCommand, PaymentProcessedEvent>() {
+class ProcessPaymentWorkflow(override val id: String) : Workflow<PricingState, PricingState>() {
   override suspend fun executeWorkflow(
-    input: ProcessPaymentCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: PricingState
+  ): Either<WorkflowError, WorkflowResult<PricingState>> = either {
     // Simulate payment processing
     delay(1500) // Simulate external payment gateway call
 
@@ -283,23 +359,23 @@ class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentC
       payment = SuccessfulPayment(
         orderId = input.orderId,
         transactionId = UUID.randomUUID(),
-        amount = input.amount
+        amount = input.total
       )
     )
-    WorkflowResult(listOf(event))
+    WorkflowResult(input, listOf(event))
   }
 }
 
-class PrepareShipmentWorkflow(override val id: String) : Workflow<PrepareShipmentCommand, ShipmentPreparedEvent>() {
+class PrepareShipmentWorkflow(override val id: String) : Workflow<PricingState, PricingState>() {
   override suspend fun executeWorkflow(
-    input: PrepareShipmentCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: PricingState
+  ): Either<WorkflowError, WorkflowResult<PricingState>> = either {
     val event = ShipmentPreparedEvent(
       id = UUID.randomUUID(),
       timestamp = Instant.now(),
       orderId = input.orderId,
       trackingNumber = "TRACK-${UUID.randomUUID().toString().take(8)}"
     )
-    WorkflowResult(listOf(event))
+    WorkflowResult(input, listOf(event))
   }
 }

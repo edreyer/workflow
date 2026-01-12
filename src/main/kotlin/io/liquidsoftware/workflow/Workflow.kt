@@ -33,13 +33,13 @@ data class Key<T : Any>(
 }
 
 // Base Workflow interface
-abstract class Workflow<I : WorkflowInput, E : Event> {
+abstract class Workflow<in I : WorkflowState, out O : WorkflowState> {
 
   abstract val id: String
 
-  protected abstract suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult>
+  protected abstract suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult<O>>
 
-  suspend fun execute(input: I): Either<WorkflowError, WorkflowResult> {
+  suspend fun execute(input: I): Either<WorkflowError, WorkflowResult<O>> {
     val startTime = Instant.now()
     val result = either {
       // Either.catch handles CancellationException properly
@@ -59,11 +59,6 @@ abstract class Workflow<I : WorkflowInput, E : Event> {
       succeeded = result.isRight()
     )
 
-    val updatedContext = result.fold(
-      { WorkflowContext().addExecution(execution) },
-      { wr -> wr.context.addExecution(execution) }
-    )
-
     return result
       .mapLeft { error ->
         if (error is WorkflowError.ExecutionContextError) {
@@ -72,10 +67,10 @@ abstract class Workflow<I : WorkflowInput, E : Event> {
           WorkflowError.ExecutionContextError(error, execution)
         }
       }
-      .map { it.copy(context = updatedContext) }
+      .map { it.copy(context = it.context.addExecution(execution)) }
   }
 }
 
-abstract class UseCase<UCC : UseCaseCommand> {
-  abstract suspend fun execute(command: UCC): Either<WorkflowError, WorkflowResult>
+abstract class UseCase<C : UseCaseCommand> {
+  abstract suspend fun execute(command: C): Either<WorkflowError, UseCaseEvents>
 }

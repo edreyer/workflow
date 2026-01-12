@@ -11,21 +11,21 @@ import java.util.UUID
 
 class WorkflowExecuteTest {
 
-  data class TestCommand(val id: UUID) : WorkflowCommand
+  data class TestState(val id: UUID) : WorkflowState
 
   data class TestEvent(
     override val id: UUID,
     override val timestamp: Instant
   ) : Event
 
-  class ThrowingWorkflow(override val id: String) : Workflow<TestCommand, TestEvent>() {
-    override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> {
+  class ThrowingWorkflow(override val id: String) : Workflow<TestState, TestState>() {
+    override suspend fun executeWorkflow(input: TestState): Either<WorkflowError, WorkflowResult<TestState>> {
       throw RuntimeException("boom")
     }
   }
 
-  class FailingWorkflow(override val id: String) : Workflow<TestCommand, TestEvent>() {
-    override suspend fun executeWorkflow(input: TestCommand): Either<WorkflowError, WorkflowResult> = either {
+  class FailingWorkflow(override val id: String) : Workflow<TestState, TestState>() {
+    override suspend fun executeWorkflow(input: TestState): Either<WorkflowError, WorkflowResult<TestState>> = either {
       raise(WorkflowError.ExecutionError("failed"))
     }
   }
@@ -33,7 +33,7 @@ class WorkflowExecuteTest {
   @Test
   fun `execute should wrap exception error with execution context`() {
     val workflow = ThrowingWorkflow("throwing")
-    val result = runBlocking { workflow.execute(TestCommand(UUID.randomUUID())) }
+    val result = runBlocking { workflow.execute(TestState(UUID.randomUUID())) }
 
     assertTrue(result.isLeft())
     result.fold(
@@ -55,7 +55,7 @@ class WorkflowExecuteTest {
   @Test
   fun `execute should wrap left result with execution context`() {
     val workflow = FailingWorkflow("failing")
-    val result = runBlocking { workflow.execute(TestCommand(UUID.randomUUID())) }
+    val result = runBlocking { workflow.execute(TestState(UUID.randomUUID())) }
 
     assertTrue(result.isLeft())
     result.fold(

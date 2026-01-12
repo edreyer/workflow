@@ -32,17 +32,14 @@
       * [Flow of Data](#flow-of-data)
       * [Benefits of This Approach](#benefits-of-this-approach)
     * [The Workflow DSL](#the-workflow-dsl)
-      * [Core DSL Methods](#core-dsl-methods)
-        * [`useCase { ... }`](#usecase---)
-        * [`first(workflow)`](#firstworkflow)
-        * [`then(workflow)`](#thenworkflow)
-        * [`thenIf(workflow, predicate)`](#thenifworkflow-predicate)
-        * [`parallel { ... }`](#parallel---)
-        * [`parallelJoin(...)`](#paralleljoin)
-      * [Data Mapping DSL](#data-mapping-dsl)
-        * [Property Mapping Block](#property-mapping-block)
-        * [`from` infix function](#from-infix-function)
-      * [Data Extraction Methods](#data-extraction-methods)
+    * [Core DSL Methods](#core-dsl-methods)
+      * [`useCase { ... }`](#usecase---)
+      * [`startWith { ... }`](#startwith---)
+      * [`then(workflow)`](#thenworkflow)
+      * [`thenIf(workflow, predicate)`](#thenifworkflow-predicate)
+      * [`parallel { ... }`](#parallel---)
+      * [`parallelJoin(...)`](#paralleljoin)
+    * [Data Extraction Methods](#data-extraction-methods)
         * [`WorkflowResult.getFromEvent<T>(property)`](#workflowresultgetfromeventtproperty)
         * [`WorkflowContext.getTypedData<T>(key, default)`](#workflowcontextgettypeddatatkey-default)
       * [Reasoning About the DSL](#reasoning-about-the-dsl)
@@ -132,9 +129,9 @@ accomplish this.
 ## Key Features
 
 ### Fluent DSL for Workflow Composition
-- **Intuitive Chain Building**: Create complex business processes with a readable, type-safe DSL
-- **Declarative Syntax**: Define workflows using `first`, `then`, and `thenIf`, plus `parallel` and `parallelJoin` for clear intent
-- **Minimal Boilerplate**: Focus on business logic rather than plumbing code
+- **Intuitive Chain Building**: Compose business processes by passing a typed `WorkflowState` through `startWith`, `then`, and companion helpers
+- **Declarative Syntax**: Chain `startWith`, `then`, `thenIf`, `parallel`, and `parallelJoin` to express the flow of state and events with clear intent
+- **Minimal Boilerplate**: Focus on business logic while the DSL handles sequencing, error propagation, and `WorkflowResult` merging
 
 ### Flexible Execution Models
 - **Sequential Processing**: Execute workflows in order, with each step building on previous results
@@ -167,60 +164,61 @@ accomplish this.
 Here's how it looks to construct and execute a use case:
 
 ```kotlin
-  val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
-
-    // The first workflow must be configured with this DSL method
-    first(workflow = ValidateOrderWorkflow("validate-order"))
-
-    // Run pricing workflows in parallel and merge their events
-    then(
-      parallelJoin(
-        CalculateSubtotalWorkflow("calc-subtotal"),
-        CalculateTaxWorkflow("calc-tax"),
-      ) { subtotal, tax ->
-        PricingCalculatedEvent(
-          id = UUID.randomUUID(),
-          timestamp = Instant.now(),
-          orderId = subtotal.orderId,
-          subtotal = subtotal.subtotal,
-          tax = tax.tax,
-          total = subtotal.subtotal + tax.tax
-        )
-      }
-    )
-
-    // After validation, run inventory check and payment processing in parallel
-    parallel {
-      then(CheckInventoryWorkflow("check-inventory"))
-      then(ProcessPaymentWorkflow("process-payment")) {
-        "orderId" from Key.of<UUID>("orderId")      // Type-safe UUID mapping
-        "amount" from Key.of<Double>("totalAmount") // Type-safe Double mapping
-      }
-    }
-
-    thenIf(
-      PrepareShipmentWorkflow("prepare-shipment"),
-      predicate = { result ->
-        when (result.getFromEvent(PaymentProcessedEvent::payment)) {
-          is SuccessfulPayment -> true
-          else -> false
-        }
-      }
+val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
+  startWith { command ->
+    Either.Right(
+      OrderDraftState(
+        orderId = command.orderId,
+        customerId = command.customerId,
+        items = command.items,
+        totalAmount = command.totalAmount
+      )
     )
   }
 
+  then(ValidateOrderWorkflow("validate-order"))
 
-suspend fun processOrder(): Either<WorkflowError, WorkflowResult> {
-  return orderProcessingUseCase.execute(initialCommand)
+  then(
+    parallelJoin(
+      CalculateSubtotalWorkflow("calc-subtotal"),
+      CalculateTaxWorkflow("calc-tax"),
+    ) { subtotal, tax ->
+      PricingState(
+        orderId = subtotal.orderId,
+        customerId = subtotal.customerId,
+        items = subtotal.items,
+        totalAmount = subtotal.totalAmount,
+        shippingAddress = subtotal.shippingAddress,
+        subtotal = subtotal.subtotal,
+        tax = tax.tax,
+        total = subtotal.subtotal + tax.tax
+      )
+    }
+  )
+
+  parallel {
+    then(CheckInventoryWorkflow("check-inventory"))
+    then(ProcessPaymentWorkflow("process-payment"))
+  }
+
+  thenIf(
+    PrepareShipmentWorkflow("prepare-shipment")
+  ) {
+    result ->
+      val paymentSuccessful = when (result.getFromEvent(PaymentProcessedEvent::payment)) {
+        is SuccessfulPayment -> true
+        else -> false
+      }
+      result.context.getTypedData<Boolean>("inventoryAvailable") == true && paymentSuccessful
+  }
 }
-```
 
-If you’re already in a coroutine scope, you can execute a use case directly:
-
-```kotlin
-coroutineScope {
+runBlocking {
   val result = orderProcessingUseCase.execute(initialCommand)
-  println(result)
+  when (result) {
+    is Either.Right -> println("UseCase emitted ${result.value.events.size} events")
+    is Either.Left -> println("Use case failed: ${result.value}")
+  }
 }
 ```
 
@@ -376,16 +374,15 @@ Events represent the outcomes of workflow execution:
 
 #### Flow of Data
 
-The Workflow pattern establishes a clear flow of data through the system:
+The Workflow pattern establishes a clear flow of typed state and events:
 
-1. **Input Reception**: A UseCase receives a Command or Query
-2. **First Workflow**: The input is passed to the first workflow
-3. **Event Generation**: The workflow processes the input and produces one or more Events
-4. **Automatic Mapping**: Data from these Events is automatically extracted to construct the input for the next workflow
-5. **Continuation**: This process repeats through the workflow chain
-6. **Result Collection**: The UseCase collects all Events generated during execution
+1. **Input Reception**: A UseCase receives a Command or Query and immediately uses `startWith` to build the initial `WorkflowState`.
+2. **Stateful Workflows**: Each workflow executes with the current `WorkflowState`, emits events, and returns an updated state bundled inside `WorkflowResult`.
+3. **Result Merging**: `WorkflowResult.mergePrevious` keeps previous events/context while carrying the latest state forward, maintaining deterministic ordering.
+4. **Continuation**: The next workflow in the chain receives the new state and repeats the process.
+5. **Final Events**: When the chain completes, the UseCase wraps the accumulated events in `UseCaseEvents` so callers see what happened.
 
-This systematic flow ensures a clean separation between inputs (intentions) and outputs (results), making the system more predictable and easier to reason about.
+This state-first model keeps the data flow explicit and reduces the need for fragile auto-mapping between workflows.
 
 #### Benefits of This Approach
 
@@ -405,35 +402,43 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 
 - **Purpose**: Entry point for creating a use case using the builder pattern
 - **Usage**: Wraps all other DSL methods in a configuration block
-- **How it works**: Initializes a use case builder and returns a fully configured UseCase instance
+- **How it works**: Initializes a use case builder and returns a fully configured `UseCase<C>` instance
 - **Example**: `val myUseCase = useCase<MyCommand> { ... }`
 
-##### `first(workflow)`
+##### `startWith { ... }`
 
-- **Purpose**: Specifies the first workflow in a chain
-- **Usage**: Must be called once at the beginning of a useCase block
-- **How it works**: Sets the initial workflow that will receive the use case command
-- **Example**: `first(validateUserWorkflow)`
+- **Purpose**: Constructs the initial `WorkflowState` for the chain
+- **Usage**: Must be the first method invoked and converts the incoming command/query into a typed state
+- **How it works**: Returns an `Either<WorkflowError, S>` where `S : WorkflowState`, setting the foundation for the rest of the pipeline
+- **Example**:
+  ```
+  startWith { command ->
+    Either.Right(InitialOrderState(
+      orderId = command.orderId,
+      items = command.items
+    ))
+  }
+  ```
 
 ##### `then(workflow)`
 
-- **Purpose**: Adds a workflow to be executed after the previous one
-- **Usage**: Chain multiple calls to create a sequence of workflows
-- **How it works**: Automatically maps output events from previous workflows to this workflow's input
+- **Purpose**: Runs the next workflow in the chain and advances state
+- **Usage**: Combine workflows sequentially with multiple `then` calls
+- **How it works**: Casts the latest `WorkflowState` to the workflow’s input, executes it, merges its `WorkflowResult` (state, events, context), and passes the new state forward
 - **Example**: `then(createUserWorkflow)`
 
 ##### `thenIf(workflow, predicate)`
 
 - **Purpose**: Conditionally executes a workflow based on previous results
-- **Usage**: Used when a workflow should only run if certain conditions are met
-- **How it works**: Evaluates the predicate function against the current WorkflowResult
+- **Usage**: Guard executions that depend on context or event data
+- **How it works**: The predicate receives the current `WorkflowResult<out WorkflowState>`; the workflow runs only if the predicate returns true
 - **Example**: `thenIf(sendWelcomeEmailWorkflow) { result -> result.context.getTypedData<Boolean>("emailVerified") == true }`
 
 ##### `parallel { ... }`
 
-- **Purpose**: Creates a block of workflows to be executed concurrently
-- **Usage**: Use when multiple workflows can run independently
-- **How it works**: Executes all workflows in the block in parallel, then combines their results
+- **Purpose**: Executes side-effect workflows concurrently while keeping the primary state unchanged
+- **Usage**: Run independent workflows that observe the current state but don’t produce a new one
+- **How it works**: Executes each branch in its own coroutine, aggregates events/context, and returns the original state along with the combined metadata
 - **Example**:
   ```
   parallel {
@@ -444,9 +449,9 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 
 ##### `parallelJoin(...)`
 
-- **Purpose**: Executes 2..8 workflows concurrently and merges their typed events
-- **Usage**: Use when branches share the same input type and you want a typed merged event
-- **How it works**: Runs all branches in parallel, extracts exactly one event per branch type, preserves branch events, and appends the merged event
+- **Purpose**: Runs 2..8 workflows concurrently and merges their output states into one typed result
+- **Usage**: Use when multiple branches need the same input state and you want to build a composite state plus events
+- **How it works**: Runs the branches in parallel, collects each branch’s `WorkflowState`, merges them with the provided lambda, and preserves all branch events before appending the merged one
 - **Example**:
   ```
   then(
@@ -460,57 +465,6 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
     }
   )
   ```
-
-#### Data Mapping DSL
-
-##### Property Mapping Block
-
-- **Purpose**: Explicitly map data between workflow steps with type safety
-- **Usage**: Optional block after `then` or `thenIf` methods
-- **How it works**: Creates type-safe mappings between output event properties and input command properties using `Key<T>` objects
-- **Example**:
-  ```
-  then(createAccountWorkflow) {
-    "accountName" from Key.of<String>("userName")
-    "initialBalance" from Key.of<Double>("depositAmount")
-  }
-  ```
-
-##### `from` infix function
-
-- **Purpose**: Maps a source property to a target property with compile-time type safety
-- **Usage**: Used within a property mapping block with `Key<T>` objects
-- **How it works**: Specifies that the target property should be populated from the named source property, with type validation at composition time
-- **Example**: `"targetField" from Key.of<String>("sourceField")`
-
-##### Type-Safe Key Creation
-
-The `Key<T>` companion object provides several ways to create type-safe property keys:
-
-- **Generic creation**: `Key.of<Type>("propertyName")` - Uses reified generics for any type
-- **Convenience methods** for common types:
-  - `Key.string("propertyName")` - For String properties
-  - `Key.uuid("propertyName")` - For UUID properties  
-  - `Key.double("propertyName")` - For Double properties
-  - `Key.int("propertyName")` - For Int properties
-  - `Key.boolean("propertyName")` - For Boolean properties
-  - `Key.long("propertyName")` - For Long properties
-
-**Example using convenience methods**:
-```
-then(processPaymentWorkflow) {
-  "orderId" from Key.uuid("orderId")
-  "amount" from Key.double("totalAmount")
-  "verified" from Key.boolean("isVerified")
-}
-```
-
-##### Type Validation
-
-The system performs type validation at composition time:
-- If source and target types don't match, a `CompositionError` is thrown
-- Type mismatches are caught early during workflow composition, not at runtime
-- This prevents `ClassCastException` errors and provides clear error messages
 
 #### Data Extraction Methods
 
@@ -1000,22 +954,15 @@ when (paymentType) {
 
 #### Complex Data Mapping Strategies
 
-For use cases with complex data transformations:
+For use cases that materialize derived structures:
 
-- **Explicit Property Mapping**: Use the property mapping DSL for clarity when transformations are complex
+- **State Transformation Workflows**: Use workflows dedicated to reshaping the current `WorkflowState` into richer variants; each workflow emits its own events and returns the new typed state you need for downstream logic.
   ```kotlin
-  then(GenerateInvoiceWorkflow("generate-invoice")) {
-    "invoiceItems" from Key.of<List<CartItem>>("cartItems") // Type-safe transformation from shopping cart to invoice
-    "billingAddress" from Key.of<Address>("shippingAddress") // Type-safe address information reuse
-    "invoiceDate" from Key.of<LocalDate>("orderDate") // Type-safe date mapping
-  }
+  then(CalculateInvoiceWorkflow("calculate-invoice"))
   ```
 
-- **Transformation Workflows**: Create dedicated workflows whose primary purpose is to transform data between formats or domains
-
-- **Context Enrichment**: Use the workflow context to progressively build up complex data structures
+- **Context Enrichment**: Store intermediate calculations or metadata in `WorkflowContext` to make them available later in the chain.
   ```kotlin
-  // Store intermediate calculation results in context
   WorkflowResult(
     listOf(event),
     context.addData("taxCalculation", taxDetails)
