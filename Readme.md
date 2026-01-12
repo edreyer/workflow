@@ -38,6 +38,7 @@
         * [`then(workflow)`](#thenworkflow)
         * [`thenIf(workflow, predicate)`](#thenifworkflow-predicate)
         * [`parallel { ... }`](#parallel---)
+        * [`parallelJoin(...)`](#paralleljoin)
       * [Data Mapping DSL](#data-mapping-dsl)
         * [Property Mapping Block](#property-mapping-block)
         * [`from` infix function](#from-infix-function)
@@ -132,7 +133,7 @@ accomplish this.
 
 ### Fluent DSL for Workflow Composition
 - **Intuitive Chain Building**: Create complex business processes with a readable, type-safe DSL
-- **Declarative Syntax**: Define workflows using `first`, `then`, and `thenIf`, and `parallel` methods for clear intent
+- **Declarative Syntax**: Define workflows using `first`, `then`, and `thenIf`, plus `parallel` and `parallelJoin` for clear intent
 - **Minimal Boilerplate**: Focus on business logic rather than plumbing code
 
 ### Flexible Execution Models
@@ -170,6 +171,23 @@ Here's how it looks to construct and execute a use case:
 
     // The first workflow must be configured with this DSL method
     first(workflow = ValidateOrderWorkflow("validate-order"))
+
+    // Run pricing workflows in parallel and merge their events
+    then(
+      parallelJoin(
+        CalculateSubtotalWorkflow("calc-subtotal"),
+        CalculateTaxWorkflow("calc-tax"),
+      ) { subtotal, tax ->
+        PricingCalculatedEvent(
+          id = UUID.randomUUID(),
+          timestamp = Instant.now(),
+          orderId = subtotal.orderId,
+          subtotal = subtotal.subtotal,
+          tax = tax.tax,
+          total = subtotal.subtotal + tax.tax
+        )
+      }
+    )
 
     // After validation, run inventory check and payment processing in parallel
     parallel {
@@ -422,6 +440,25 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
     then(checkInventoryWorkflow)
     then(processPaymentWorkflow)
   }
+  ```
+
+##### `parallelJoin(...)`
+
+- **Purpose**: Executes 2..8 workflows concurrently and merges their typed events
+- **Usage**: Use when branches share the same input type and you want a typed merged event
+- **How it works**: Runs all branches in parallel, extracts exactly one event per branch type, preserves branch events, and appends the merged event
+- **Example**:
+  ```
+  then(
+    parallelJoin(loadCatalogs, fetchSerp) { catalogs, serp ->
+      ReadyForConversion(
+        searchId = catalogs.searchId,
+        criteria = catalogs.criteria,
+        catalogs = catalogs.catalogs,
+        serpItineraries = serp.serpItineraries,
+      )
+    }
+  )
   ```
 
 #### Data Mapping DSL
@@ -918,6 +955,21 @@ Considerations:
 - Only parallelize truly independent workflows that don't rely on each other's outputs
 - Be aware of resource contention (database connections, external API rate limits)
 - Consider adding timeout handling for operations that may take an unpredictable amount of time
+
+When you need a typed aggregate event from parallel branches, use `parallelJoin`:
+
+```kotlin
+then(
+  parallelJoin(loadCatalogs, fetchSerp) { catalogs, serp ->
+    ReadyForConversion(
+      searchId = catalogs.searchId,
+      criteria = catalogs.criteria,
+      catalogs = catalogs.catalogs,
+      serpItineraries = serp.serpItineraries,
+    )
+  }
+)
+```
 
 #### Conditional Execution Patterns
 

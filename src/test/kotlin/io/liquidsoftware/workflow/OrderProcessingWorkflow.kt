@@ -26,16 +26,26 @@ fun main() {
   // Assemble UseCase
   // -------------------------
 
-  data class ProcessOrderCommand(
-    val orderId: UUID,
-    val customerId: UUID,
-    val items: List<OrderItem>,
-    val totalAmount: Double
-  ) : UseCaseCommand
-
   val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
 
     first(workflow = ValidateOrderWorkflow("validate-order"))
+
+    // Calculate pricing in parallel and emit a merged pricing event
+    then(
+      parallelJoin(
+        CalculateSubtotalWorkflow("calc-subtotal"),
+        CalculateTaxWorkflow("calc-tax"),
+      ) { subtotal, tax ->
+        PricingCalculatedEvent(
+          id = UUID.randomUUID(),
+          timestamp = Instant.now(),
+          orderId = subtotal.orderId,
+          subtotal = subtotal.subtotal,
+          tax = tax.tax,
+          total = subtotal.subtotal + tax.tax
+        )
+      }
+    )
 
     // After validation, run inventory check and payment processing in parallel
     parallel {
@@ -89,6 +99,13 @@ fun main() {
 // -------------------------
 // Commands
 // -------------------------
+data class ProcessOrderCommand(
+  val orderId: UUID,
+  val customerId: UUID,
+  val items: List<OrderItem>,
+  val totalAmount: Double
+) : UseCaseCommand, WorkflowCommand
+
 data class ValidateOrderCommand(
   val orderId: UUID,
   val customerId: UUID,
@@ -140,6 +157,29 @@ data class InventoryVerifiedEvent(
   val availableItems: List<OrderItem>
 ) : Event
 
+data class SubtotalCalculatedEvent(
+  override val id: UUID,
+  override val timestamp: Instant,
+  val orderId: UUID,
+  val subtotal: Double
+) : Event
+
+data class TaxCalculatedEvent(
+  override val id: UUID,
+  override val timestamp: Instant,
+  val orderId: UUID,
+  val tax: Double
+) : Event
+
+data class PricingCalculatedEvent(
+  override val id: UUID,
+  override val timestamp: Instant,
+  val orderId: UUID,
+  val subtotal: Double,
+  val tax: Double,
+  val total: Double
+) : Event
+
 sealed interface Payment
 data class FailedPayment(val orderId: UUID, val amount: Double) : Payment
 data class SuccessfulPayment(val orderId: UUID, val amount: Double, val transactionId: UUID) : Payment
@@ -174,6 +214,36 @@ class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCom
       orderId = input.orderId,
       shippingAddress = "123 Main St", // Simplified for example
       items = input.items
+    )
+    WorkflowResult(listOf(event))
+  }
+}
+
+class CalculateSubtotalWorkflow(override val id: String) : Workflow<ProcessOrderCommand, SubtotalCalculatedEvent>() {
+  override suspend fun executeWorkflow(
+    input: ProcessOrderCommand
+  ): Either<WorkflowError, WorkflowResult> = either {
+    val subtotal = input.items.sumOf { it.quantity * it.price }
+    val event = SubtotalCalculatedEvent(
+      id = UUID.randomUUID(),
+      timestamp = Instant.now(),
+      orderId = input.orderId,
+      subtotal = subtotal
+    )
+    WorkflowResult(listOf(event))
+  }
+}
+
+class CalculateTaxWorkflow(override val id: String) : Workflow<ProcessOrderCommand, TaxCalculatedEvent>() {
+  override suspend fun executeWorkflow(
+    input: ProcessOrderCommand
+  ): Either<WorkflowError, WorkflowResult> = either {
+    val tax = input.totalAmount * 0.08
+    val event = TaxCalculatedEvent(
+      id = UUID.randomUUID(),
+      timestamp = Instant.now(),
+      orderId = input.orderId,
+      tax = tax
     )
     WorkflowResult(listOf(event))
   }

@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.reflect.KProperty1
 
-sealed interface WorkflowInput
+interface WorkflowInput
 interface WorkflowCommand : WorkflowInput
 interface WorkflowQuery : WorkflowInput
 
