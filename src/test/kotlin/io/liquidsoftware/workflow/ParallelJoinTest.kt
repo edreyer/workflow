@@ -33,6 +33,8 @@ class ParallelJoinTest {
     val label: String
   ) : Event
 
+  data class JoinCommand(val value: String) : UseCaseCommand
+
   class EmittingWorkflow<S : WorkflowState>(
     override val id: String,
     private val delayMs: Long = 0L,
@@ -124,5 +126,34 @@ class ParallelJoinTest {
 
     assertTrue(result is Either.Left)
     assertTrue(elapsed < 1000L)
+  }
+
+  @Test
+  fun `parallelJoin works inside useCase with inferred input type`() {
+    val alphaEvent = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
+    val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
+
+    val joinUseCase = useCase<JoinCommand> {
+      startWith { command -> Either.Right(JoinState(command.value)) }
+      then(
+        parallelJoin(
+          EmittingWorkflow(
+            id = "alpha",
+            events = listOf(alphaEvent)
+          ) { input -> AlphaState(input.value, "alpha") },
+          EmittingWorkflow(
+            id = "beta",
+            events = listOf(betaEvent)
+          ) { input -> BetaState(input.value, "beta") }
+        ) { a, b ->
+          MergedState(a.value, a.alpha, b.beta)
+        }
+      )
+    }
+
+    val result = runBlocking { joinUseCase.execute(JoinCommand("ok")) }
+
+    assertTrue(result is Either.Right)
+    assertEquals(listOf(alphaEvent, betaEvent), result.value.events)
   }
 }

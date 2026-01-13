@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2026-01-13
+
+- Added an explicit input-type hint on `Workflow` and propagate it through `parallelJoin`, preventing runtime composition errors in the DSL while keeping inference-friendly usage.
+- Added a DSL regression test to ensure `parallelJoin` works inside `useCase` without explicit type parameters.
+- Removed redundant variance projections in `parallelJoin` internals to silence compiler warnings.
+
 ## 0.2.0 - 2026-01-12
 
 ### Added

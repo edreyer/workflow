@@ -37,6 +37,13 @@ abstract class Workflow<in I : WorkflowState, out O : WorkflowState> {
 
   abstract val id: String
 
+  /**
+   * Optional input type hint used by the DSL to avoid reflective erasure issues
+   * (wrappers like parallelJoin supply this explicitly).
+   */
+  open val inputClass: KClass<out WorkflowState>?
+    get() = WorkflowUtils.getWorkflowInputClass(this::class)
+
   protected abstract suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult<O>>
 
   suspend fun execute(input: I): Either<WorkflowError, WorkflowResult<O>> {

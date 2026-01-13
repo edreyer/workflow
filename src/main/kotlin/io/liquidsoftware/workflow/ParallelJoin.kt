@@ -6,7 +6,9 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.selects.select
+import kotlin.reflect.KClass
 
 /**
  * Controls how parallelJoin handles branch failures.
@@ -434,16 +436,18 @@ inline fun <
 
 @PublishedApi
 internal fun <I : WorkflowState, R : WorkflowState> parallelJoinInternal(
-  workflows: List<Workflow<I, out WorkflowState>>,
+  workflows: List<Workflow<I, WorkflowState>>,
   policy: ParallelErrorPolicy,
   id: String,
   merge: (List<WorkflowState>) -> R
 ): Workflow<I, R> {
+  val inputClass = workflows.firstNotNullOfOrNull { WorkflowUtils.getWorkflowInputClass<WorkflowState>(it) }
   return ParallelJoinWorkflow(
     id = id,
     workflows = workflows,
     policy = policy,
-    merge = merge
+    merge = merge,
+    inputClass = inputClass
   )
 }
 
@@ -454,9 +458,10 @@ internal fun buildParallelJoinId(vararg workflows: Workflow<*, *>): String {
 
 private class ParallelJoinWorkflow<I : WorkflowState, R : WorkflowState>(
   override val id: String,
-  private val workflows: List<Workflow<I, out WorkflowState>>,
+  private val workflows: List<Workflow<I, WorkflowState>>,
   private val policy: ParallelErrorPolicy,
-  private val merge: (List<WorkflowState>) -> R
+  private val merge: (List<WorkflowState>) -> R,
+  override val inputClass: KClass<out WorkflowState>?
 ) : Workflow<I, R>() {
   override suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult<R>> = either {
     val results = runParallel(input, workflows, policy).bind()
@@ -469,9 +474,9 @@ private class ParallelJoinWorkflow<I : WorkflowState, R : WorkflowState>(
 
 private suspend fun <I : WorkflowState> runParallel(
   input: I,
-  workflows: List<Workflow<I, out WorkflowState>>,
+  workflows: List<Workflow<I, WorkflowState>>,
   policy: ParallelErrorPolicy
-): Either<WorkflowError, List<WorkflowResult<out WorkflowState>>> {
+): Either<WorkflowError, List<WorkflowResult<WorkflowState>>> {
   return when (policy) {
     ParallelErrorPolicy.WaitAll -> runParallelWaitAll(input, workflows)
     ParallelErrorPolicy.FailFast -> runParallelFailFast(input, workflows)
@@ -480,8 +485,8 @@ private suspend fun <I : WorkflowState> runParallel(
 
 private suspend fun <I : WorkflowState> runParallelWaitAll(
   input: I,
-  workflows: List<Workflow<I, out WorkflowState>>
-): Either<WorkflowError, List<WorkflowResult<out WorkflowState>>> = coroutineScope {
+  workflows: List<Workflow<I, WorkflowState>>
+): Either<WorkflowError, List<WorkflowResult<WorkflowState>>> = coroutineScope {
   val deferredResults = workflows.map { workflow ->
     async { workflow.execute(input) }
   }
@@ -497,8 +502,8 @@ private suspend fun <I : WorkflowState> runParallelWaitAll(
 
 private suspend fun <I : WorkflowState> runParallelFailFast(
   input: I,
-  workflows: List<Workflow<I, out WorkflowState>>
-): Either<WorkflowError, List<WorkflowResult<out WorkflowState>>> = coroutineScope {
+  workflows: List<Workflow<I, WorkflowState>>
+): Either<WorkflowError, List<WorkflowResult<WorkflowState>>> = coroutineScope {
   if (workflows.isEmpty()) {
     return@coroutineScope Either.Right(emptyList())
   }
@@ -507,12 +512,12 @@ private suspend fun <I : WorkflowState> runParallelFailFast(
     async { workflow.execute(input) }
   }
   val indexByDeferred = deferreds.withIndex().associate { it.value to it.index }
-  val results = MutableList<Either<WorkflowError, WorkflowResult<out WorkflowState>>?>(deferreds.size) { null }
+  val results = MutableList<Either<WorkflowError, WorkflowResult<WorkflowState>>?>(deferreds.size) { null }
   val pending = deferreds.toMutableSet()
   var failureObserved = false
 
   while (pending.isNotEmpty() && !failureObserved) {
-    val (completed, result) = select<Pair<Deferred<Either<WorkflowError, WorkflowResult<out WorkflowState>>>, Either<WorkflowError, WorkflowResult<out WorkflowState>>>> {
+    val (completed, result) = select<Pair<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>, Either<WorkflowError, WorkflowResult<WorkflowState>>>> {
       pending.forEach { deferred ->
         deferred.onAwait { value -> deferred to value }
       }
@@ -526,7 +531,7 @@ private suspend fun <I : WorkflowState> runParallelFailFast(
 
   if (failureObserved) {
     pending.forEach { it.cancel() }
-    pending.forEach { it.join() }
+    pending.joinAll()
     deferreds.forEach { deferred ->
       if (!deferred.isCancelled && deferred.isCompleted) {
         val result = runCatching { deferred.await() }.getOrNull()

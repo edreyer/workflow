@@ -179,7 +179,9 @@ private fun <I : WorkflowState> castState(
   state: WorkflowState,
   workflow: Workflow<I, *>
 ): Either<WorkflowError, I> {
-  val inputClass = WorkflowUtils.getWorkflowInputClass<I>(workflow)
+  @Suppress("UNCHECKED_CAST")
+  val inputClass = (workflow.inputClass as? KClass<I>)
+    ?: WorkflowUtils.getWorkflowInputClass<I>(workflow)
     ?: return Either.Left(
       WorkflowError.CompositionError(
         "Cannot determine input type for workflow",
