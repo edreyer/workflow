@@ -71,6 +71,250 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
     steps.add(scope.build())
   }
 
+  // PublishedApi to allow inline parallelJoin overloads to call this across module boundaries
+  @PublishedApi
+  internal fun <I : WorkflowState, O : WorkflowState> addSequential(workflow: Workflow<I, O>) {
+    otherMethodCalled = true
+    steps.add(SequentialStep(workflow))
+  }
+
+  // parallelJoin overloads (2..8) are written out to preserve type-safe merges without losing inference;
+  // consider codegen if we ever need to extend them. CState naming avoids colliding with the command type C.
+  inline fun <I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, R : WorkflowState> parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    crossinline merge: (A, B) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, merge))
+
+  inline fun <I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, R : WorkflowState> parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    policy: ParallelErrorPolicy,
+    crossinline merge: (A, B) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, policy, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    crossinline merge: (A, B, CState) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    policy: ParallelErrorPolicy,
+    crossinline merge: (A, B, CState) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, policy, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    crossinline merge: (A, B, CState, D) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    policy: ParallelErrorPolicy,
+    crossinline merge: (A, B, CState, D) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, policy, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    crossinline merge: (A, B, CState, D, E) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    policy: ParallelErrorPolicy,
+    crossinline merge: (A, B, CState, D, E) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, policy, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    reified F : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    f: Workflow<I, F>,
+    crossinline merge: (A, B, CState, D, E, F) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    reified F : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    f: Workflow<I, F>,
+    policy: ParallelErrorPolicy,
+    crossinline merge: (A, B, CState, D, E, F) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, policy, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    reified F : WorkflowState,
+    reified G : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    f: Workflow<I, F>,
+    g: Workflow<I, G>,
+    crossinline merge: (A, B, CState, D, E, F, G) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    reified F : WorkflowState,
+    reified G : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    f: Workflow<I, F>,
+    g: Workflow<I, G>,
+    policy: ParallelErrorPolicy,
+    crossinline merge: (A, B, CState, D, E, F, G) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, policy, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    reified F : WorkflowState,
+    reified G : WorkflowState,
+    reified H : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    f: Workflow<I, F>,
+    g: Workflow<I, G>,
+    h: Workflow<I, H>,
+    crossinline merge: (A, B, CState, D, E, F, G, H) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, h, merge))
+
+  inline fun <
+    I : WorkflowState,
+    reified A : WorkflowState,
+    reified B : WorkflowState,
+    reified CState : WorkflowState,
+    reified D : WorkflowState,
+    reified E : WorkflowState,
+    reified F : WorkflowState,
+    reified G : WorkflowState,
+    reified H : WorkflowState,
+    R : WorkflowState
+  > parallelJoin(
+    a: Workflow<I, A>,
+    b: Workflow<I, B>,
+    c: Workflow<I, CState>,
+    d: Workflow<I, D>,
+    e: Workflow<I, E>,
+    f: Workflow<I, F>,
+    g: Workflow<I, G>,
+    h: Workflow<I, H>,
+    policy: ParallelErrorPolicy,
+    crossinline merge: (A, B, CState, D, E, F, G, H) -> R,
+  ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, h, policy, merge))
+
   fun build(): UseCase<C> {
     if (!startCalled) {
       throw IllegalStateException("startWith() must be called to set the initial state")

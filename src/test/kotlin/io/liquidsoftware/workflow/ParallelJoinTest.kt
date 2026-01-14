@@ -1,6 +1,7 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
+import arrow.core.raise.either
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.time.Instant
@@ -32,6 +33,18 @@ class ParallelJoinTest {
     override val timestamp: Instant,
     val label: String
   ) : Event
+
+  class ConsumingWorkflow(
+    override val id: String,
+    private val eventLabel: String
+  ) : Workflow<MergedState, JoinState>() {
+    override suspend fun executeWorkflow(input: MergedState): Either<WorkflowError, WorkflowResult<JoinState>> = either {
+      WorkflowResult(
+        JoinState("${input.alpha}-${input.beta}"),
+        listOf(ExtraEvent(UUID.randomUUID(), Instant.EPOCH, eventLabel))
+      )
+    }
+  }
 
   data class JoinCommand(val value: String) : UseCaseCommand
 
@@ -135,25 +148,54 @@ class ParallelJoinTest {
 
     val joinUseCase = useCase<JoinCommand> {
       startWith { command -> Either.Right(JoinState(command.value)) }
-      then(
-        parallelJoin(
-          EmittingWorkflow(
-            id = "alpha",
-            events = listOf(alphaEvent)
-          ) { input -> AlphaState(input.value, "alpha") },
-          EmittingWorkflow(
-            id = "beta",
-            events = listOf(betaEvent)
-          ) { input -> BetaState(input.value, "beta") }
-        ) { a, b ->
-          MergedState(a.value, a.alpha, b.beta)
-        }
-      )
+      parallelJoin(
+        EmittingWorkflow(
+          id = "alpha",
+          events = listOf(alphaEvent)
+        ) { input -> AlphaState(input.value, "alpha") },
+        EmittingWorkflow(
+          id = "beta",
+          events = listOf(betaEvent)
+        ) { input -> BetaState(input.value, "beta") }
+      ) { a, b ->
+        MergedState(a.value, a.alpha, b.beta)
+      }
     }
 
     val result = runBlocking { joinUseCase.execute(JoinCommand("ok")) }
 
     assertTrue(result is Either.Right)
     assertEquals(listOf(alphaEvent, betaEvent), result.value.events)
+  }
+
+  @Test
+  fun `top-level parallelJoin feeds subsequent workflow`() {
+    val alphaEvent = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
+    val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
+
+    val useCase = useCase<JoinCommand> {
+      startWith { command -> Either.Right(JoinState(command.value)) }
+      parallelJoin(
+        EmittingWorkflow(
+          id = "alpha",
+          events = listOf(alphaEvent)
+        ) { input -> AlphaState(input.value, "alpha") },
+        EmittingWorkflow(
+          id = "beta",
+          events = listOf(betaEvent)
+        ) { input -> BetaState(input.value, "beta") }
+      ) { a, b ->
+        MergedState(a.value, a.alpha, b.beta)
+      }
+      then(ConsumingWorkflow("consume", "joined"))
+    }
+
+    val result = runBlocking { useCase.execute(JoinCommand("ok")) }
+
+    assertTrue(result is Either.Right)
+    val events = result.value.events
+    assertEquals(3, events.size)
+    assertTrue(events.containsAll(listOf(alphaEvent, betaEvent)))
+    assertTrue(events.any { it is ExtraEvent && it.label == "joined" })
   }
 }

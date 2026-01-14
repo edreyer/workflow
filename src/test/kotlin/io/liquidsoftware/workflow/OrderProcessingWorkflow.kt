@@ -40,23 +40,21 @@ fun main() {
 
     then(ValidateOrderWorkflow("validate-order"))
 
-    then(
-      parallelJoin(
-        CalculateSubtotalWorkflow("calc-subtotal"),
-        CalculateTaxWorkflow("calc-tax"),
-      ) { subtotal, tax ->
-        PricingState(
-          orderId = subtotal.orderId,
-          customerId = subtotal.customerId,
-          items = subtotal.items,
-          totalAmount = subtotal.totalAmount,
-          shippingAddress = subtotal.shippingAddress,
-          subtotal = subtotal.subtotal,
-          tax = tax.tax,
-          total = subtotal.subtotal + tax.tax
-        )
-      }
-    )
+    parallelJoin(
+      CalculateSubtotalWorkflow("calc-subtotal"),
+      CalculateTaxWorkflow("calc-tax"),
+    ) { subtotal, tax ->
+      PricingState(
+        orderId = subtotal.orderId,
+        customerId = subtotal.customerId,
+        items = subtotal.items,
+        totalAmount = subtotal.totalAmount,
+        shippingAddress = subtotal.shippingAddress,
+        subtotal = subtotal.subtotal,
+        tax = tax.tax,
+        total = subtotal.subtotal + tax.tax
+      )
+    }
 
     then(EmitPricingWorkflow("emit-pricing"))
 

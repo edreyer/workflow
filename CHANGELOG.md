@@ -1,20 +1,21 @@
 # Changelog
 
+## 0.2.2 - 2026-01-13
+
+- Added top-level DSL `parallelJoin(...)` overloads so joins can be declared directly (no `then(...)` wrapper); README and examples updated accordingly.
+
 ## 0.2.1 - 2026-01-13
 
-- Added an explicit input-type hint on `Workflow` and propagate it through `parallelJoin`, preventing runtime composition errors in the DSL while keeping inference-friendly usage.
-- Added a DSL regression test to ensure `parallelJoin` works inside `useCase` without explicit type parameters.
-- Removed redundant variance projections in `parallelJoin` internals to silence compiler warnings.
+- Added an explicit input-type hint on `Workflow` and propagate it through `parallelJoin` to prevent runtime composition errors while keeping inference-friendly usage.
+- Removed redundant variance projections in `parallelJoin` internals (compiler warning cleanup).
 
 ## 0.2.0 - 2026-01-12
 
 ### Added
 - `parallelJoin` overloads (2-8) with a typed merge function and DSL helpers.
 - `ParallelErrorPolicy` to choose between wait-all and fail-fast join behavior.
-- `parallelJoin` tests covering ordering, event extraction errors, wait-all error selection, and fail-fast cancellation.
 - Pricing example using `parallelJoin` in `OrderProcessingWorkflow` and README snippets.
-- Gradual state-passing workflow DSL anchored by `WorkflowState`, `UseCaseEvents`, `startWith { ... }`, `then`, `thenIf`, and `parallel`, plus coverage showing state-typed pipelines (new `StatePassingExampleTest` / updated `OrderProcessingWorkflow`).
-- Tests showcasing the new state model (`WorkflowChainTest`, `WorkflowDslTest`, `WorkflowUtilsTest`, `ParallelJoinTest`, `WorkflowDomainTest`, `WorkflowExecuteTest`) under the rewritten APIs.
+- Gradual state-passing workflow DSL anchored by `WorkflowState`, `UseCaseEvents`, `startWith { ... }`, `then`, `thenIf`, and `parallel`.
 
 ### Changed
 - `WorkflowInput` is now a regular interface (no longer sealed) to allow external implementations.

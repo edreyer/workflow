@@ -176,23 +176,21 @@ val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
 
   then(ValidateOrderWorkflow("validate-order"))
 
-  then(
-    parallelJoin(
-      CalculateSubtotalWorkflow("calc-subtotal"),
-      CalculateTaxWorkflow("calc-tax"),
-    ) { subtotal, tax ->
-      PricingState(
-        orderId = subtotal.orderId,
-        customerId = subtotal.customerId,
-        items = subtotal.items,
-        totalAmount = subtotal.totalAmount,
-        shippingAddress = subtotal.shippingAddress,
-        subtotal = subtotal.subtotal,
-        tax = tax.tax,
-        total = subtotal.subtotal + tax.tax
-      )
-    }
-  )
+  parallelJoin(
+    CalculateSubtotalWorkflow("calc-subtotal"),
+    CalculateTaxWorkflow("calc-tax"),
+  ) { subtotal, tax ->
+    PricingState(
+      orderId = subtotal.orderId,
+      customerId = subtotal.customerId,
+      items = subtotal.items,
+      totalAmount = subtotal.totalAmount,
+      shippingAddress = subtotal.shippingAddress,
+      subtotal = subtotal.subtotal,
+      tax = tax.tax,
+      total = subtotal.subtotal + tax.tax
+    )
+  }
 
   parallel {
     then(CheckInventoryWorkflow("check-inventory"))
@@ -453,16 +451,14 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 - **How it works**: Runs the branches in parallel, collects each branch’s `WorkflowState`, merges them with the provided lambda, and preserves all branch events before appending the merged one
 - **Example**:
   ```
-  then(
-    parallelJoin(loadCatalogs, fetchSerp) { catalogs, serp ->
-      ReadyForConversion(
-        searchId = catalogs.searchId,
-        criteria = catalogs.criteria,
-        catalogs = catalogs.catalogs,
-        serpItineraries = serp.serpItineraries,
-      )
-    }
-  )
+  parallelJoin(loadCatalogs, fetchSerp) { catalogs, serp ->
+    ReadyForConversion(
+      searchId = catalogs.searchId,
+      criteria = catalogs.criteria,
+      catalogs = catalogs.catalogs,
+      serpItineraries = serp.serpItineraries,
+    )
+  }
   ```
 
 #### Data Extraction Methods
@@ -909,16 +905,14 @@ Considerations:
 When you need a typed aggregate event from parallel branches, use `parallelJoin`:
 
 ```kotlin
-then(
-  parallelJoin(loadCatalogs, fetchSerp) { catalogs, serp ->
-    ReadyForConversion(
-      searchId = catalogs.searchId,
-      criteria = catalogs.criteria,
-      catalogs = catalogs.catalogs,
-      serpItineraries = serp.serpItineraries,
-    )
-  }
-)
+parallelJoin(loadCatalogs, fetchSerp) { catalogs, serp ->
+  ReadyForConversion(
+    searchId = catalogs.searchId,
+    criteria = catalogs.criteria,
+    catalogs = catalogs.catalogs,
+    serpItineraries = serp.serpItineraries,
+  )
+}
 ```
 
 #### Conditional Execution Patterns
