@@ -26,11 +26,14 @@ class ParallelJoinCompositionTest {
 
   @Test
   fun `parallelJoin fails with composition error on input mismatch`() {
+    @Suppress("UNCHECKED_CAST")
+    val wrongWorkflow = WrongInputWorkflow("wrong") as Workflow<First, Second>
+
     val useCase = useCase<FirstCommand> {
       startWith { cmd -> Either.Right(First(cmd.value)) }
-      parallelJoin(
+      parallelJoin<First, First, Second, Merged>(
         FirstWorkflow("first"),
-        WrongInputWorkflow("wrong")
+        wrongWorkflow
       ) { a, b -> Merged(a.value, b.value) }
     }
 

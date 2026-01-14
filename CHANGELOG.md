@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 - 2026-01-13
+
+- Added telemetry helpers (`UseCaseSummary`, `toSummary`) for consistent logging/metrics of use case results.
+- Added `LaunchedFailureEvent` emission on launched side-effect failures/timeouts; failure data surfaces via events/context.
+
 ## 0.3.0 - 2026-01-13
 
 - Added `thenLaunch` (fire-and-forget side-effect workflows with optional timeout) and `awaitLaunched` to drain launched work and merge their metadata without failing the chain; failures are surfaced via `LaunchedFailureEvent` and context data.

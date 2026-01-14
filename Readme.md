@@ -149,6 +149,7 @@ accomplish this.
 - **Metadata Collection**: Automatically track execution timing, workflow IDs, and success status
 - **Context Sharing**: Share non-domain data between workflows through the WorkflowContext
 - **Execution History**: Maintain a complete audit trail of all executed workflows within a use case (including failure metadata via ExecutionContextError)
+- **Observability Helpers**: Build use case summaries for logging/metrics via `toSummary` if desired
 
 ### Robust Error Handling
 - **Exception-Free Execution**: Workflow execution returns typed Either values; DSL misuse throws configuration errors

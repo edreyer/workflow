@@ -56,6 +56,12 @@ class ThenLaunchTest {
     }
   }
 
+  class IdentityWorkflow(override val id: String) : Workflow<SeedState, SeedState>() {
+    override suspend fun executeWorkflow(input: SeedState): Either<WorkflowError, WorkflowResult<SeedState>> = either {
+      WorkflowResult(input, listOf(SideEffectEvent(UUID.randomUUID(), Instant.EPOCH, "identity")))
+    }
+  }
+
   data class SeedCommand(val value: String) : UseCaseCommand
 
   @Test
@@ -188,5 +194,21 @@ class ThenLaunchTest {
     }
 
     assertTrue(result is Either.Left || result is Either.Right)
+  }
+
+  @Test
+  fun `awaitLaunched preserves state for subsequent workflow`() {
+    val useCase = useCase<SeedCommand> {
+      startWith { command -> Either.Right(SeedState(command.value)) }
+      thenLaunch(SideEffectWorkflow("first", "e1"))
+      awaitLaunched()
+      then(IdentityWorkflow("id"))
+    }
+
+    val result = runBlocking { useCase.execute(SeedCommand("ok")) }
+
+    assertTrue(result is Either.Right)
+    val labels = result.value.events.filterIsInstance<SideEffectEvent>().map { it.label }
+    assertTrue(labels.contains("e1"))
   }
 }
