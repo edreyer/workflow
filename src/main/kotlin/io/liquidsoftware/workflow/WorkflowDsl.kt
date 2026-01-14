@@ -3,9 +3,15 @@ package io.liquidsoftware.workflow
 import arrow.core.Either
 import arrow.core.flatMap
 import arrow.core.raise.either
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
+import java.time.Duration
+import java.time.Instant
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 import kotlin.reflect.KTypeParameter
@@ -27,6 +33,7 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
   private var startCalled = false
   private var otherMethodCalled = false
   private val steps = mutableListOf<WorkflowStep>()
+  private val launchedJobs = mutableListOf<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>()
 
   /**
    * Initializes the pipeline state from the command/query.
@@ -315,6 +322,25 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
     crossinline merge: (A, B, CState, D, E, F, G, H) -> R,
   ) = addSequential(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, h, policy, merge))
 
+  /**
+   * Fire-and-forget side-effect workflow. Runs in the use case scope, does not await; errors are surfaced only when awaited.
+   */
+  fun <I : WorkflowState> thenLaunch(
+    workflow: SideEffectWorkflow<I>,
+    timeout: Duration? = null
+  ) {
+    otherMethodCalled = true
+    steps.add(LaunchStep(workflow, timeout, launchedJobs))
+  }
+
+  /**
+   * Awaits all pending launched workflows, merging their events/context without failing the chain.
+   */
+  fun awaitLaunched() {
+    otherMethodCalled = true
+    steps.add(AwaitLaunchedStep(launchedJobs))
+  }
+
   fun build(): UseCase<C> {
     if (!startCalled) {
       throw IllegalStateException("startWith() must be called to set the initial state")
@@ -418,6 +444,98 @@ private class ParallelSideEffectStep<I : WorkflowState>(
     }
   }
 }
+
+private class LaunchStep<I : WorkflowState>(
+  private val workflow: SideEffectWorkflow<I>,
+  private val timeout: Duration?,
+  private val launched: MutableList<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>
+) : WorkflowStep {
+  override suspend fun execute(
+    result: WorkflowResult<WorkflowState>
+  ): Either<WorkflowError, WorkflowResult<WorkflowState>> = coroutineScope {
+    val input = castState(result.state, workflow).fold(
+      { error -> return@coroutineScope Either.Left(error) },
+      { value -> value }
+    )
+    val deferred: Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>> = async {
+      try {
+        val execution = if (timeout != null) {
+          withTimeout(timeout.toMillis()) { workflow.execute(input) }
+        } else {
+          workflow.execute(input)
+        }
+        execution
+      } catch (ex: CancellationException) {
+        Either.Left(WorkflowError.ExecutionError("thenLaunch timeout: ${workflow.id}"))
+      } catch (t: Throwable) {
+        Either.Left(WorkflowError.ExceptionError("thenLaunch failed: ${workflow.id}", t))
+      }
+    }
+    launched.add(deferred)
+    Either.Right(result)
+  }
+}
+
+private class AwaitLaunchedStep(
+  private val launched: MutableList<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>
+) : WorkflowStep {
+  override suspend fun execute(
+    result: WorkflowResult<WorkflowState>
+  ): Either<WorkflowError, WorkflowResult<WorkflowState>> {
+    if (launched.isEmpty()) {
+      return Either.Right(result)
+    }
+    val pending = launched.toList()
+    launched.clear()
+    val outcomes = runCatching { pending.awaitAll() }.getOrElse { ex ->
+      pending.forEach { it.cancel() }
+      return Either.Right(
+        result.copy(
+          context = result.context.addData("launchedFailures", listOf("awaitLaunched failure: ${ex.message}"))
+        )
+      )
+    }
+    val successes = outcomes.filterIsInstance<Either.Right<WorkflowResult<WorkflowState>>>().map { it.value }
+    val failures = outcomes.filterIsInstance<Either.Left<WorkflowError>>().map { it.value }
+    val failureEvents = failures.mapIndexed { idx, failure ->
+      LaunchedFailureEvent(
+        id = UUID.randomUUID(),
+        timestamp = Instant.now(),
+        workflowId = "launched-$idx",
+        message = when (failure) {
+          is WorkflowError.ExecutionError -> failure.message
+          is WorkflowError.ExceptionError -> failure.message
+          else -> failure.toString()
+        }
+      )
+    }
+    val mergedEvents = result.events + successes.flatMap { it.events } + failureEvents
+    val mergedContext = successes.fold(result.context) { acc, value -> acc.combine(value.context) }
+    val failureMessages = if (failures.isEmpty()) emptyList() else failures.map { failure ->
+      when (failure) {
+        is WorkflowError.ExecutionError -> "thenLaunch failure (${failure.message})"
+        is WorkflowError.ExceptionError -> "thenLaunch exception (${failure.message})"
+        else -> "thenLaunch failure ($failure)"
+      }
+    }
+    val contextWithFailures = if (failureMessages.isEmpty()) mergedContext
+      else mergedContext.addData("launchedFailures", failureMessages)
+    return Either.Right(
+      WorkflowResult(
+        state = result.state,
+        events = mergedEvents,
+        context = contextWithFailures
+      )
+    )
+  }
+}
+
+data class LaunchedFailureEvent(
+  override val id: UUID,
+  override val timestamp: Instant,
+  val workflowId: String,
+  val message: String
+) : Event
 
 private fun <I : WorkflowState> castState(
   state: WorkflowState,

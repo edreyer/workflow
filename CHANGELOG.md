@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 - 2026-01-13
+
+- Added `thenLaunch` (fire-and-forget side-effect workflows with optional timeout) and `awaitLaunched` to drain launched work and merge their metadata without failing the chain; failures are surfaced via `LaunchedFailureEvent` and context data.
+
 ## 0.2.2 - 2026-01-13
 
 - Added top-level DSL `parallelJoin(...)` overloads so joins can be declared directly (no `then(...)` wrapper); README and examples updated accordingly.

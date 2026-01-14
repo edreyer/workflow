@@ -28,16 +28,9 @@ bin/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
 
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-
 ### VS Code ###
 .vscode/
 
 ### Mac OS ###
 .DS_Store
-!/docs/release-guide.md
+docs/release-guide.md

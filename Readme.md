@@ -39,6 +39,8 @@
       * [`thenIf(workflow, predicate)`](#thenifworkflow-predicate)
       * [`parallel { ... }`](#parallel---)
       * [`parallelJoin(...)`](#paralleljoin)
+      * [`thenLaunch(workflow, timeout?)`](#thenlaunchworkflow-timeout-and-awaitlaunched)
+      * [`awaitLaunched()`](#thenlaunchworkflow-timeout-and-awaitlaunched)
     * [Data Extraction Methods](#data-extraction-methods)
         * [`WorkflowResult.getFromEvent<T>(property)`](#workflowresultgetfromeventtproperty)
         * [`WorkflowContext.getTypedData<T>(key, default)`](#workflowcontextgettypeddatatkey-default)
@@ -141,7 +143,7 @@ accomplish this.
 ### Intelligent State Handling
 - **State-Based Transitions**: Pass typed `WorkflowState` between steps to maintain type safety throughout the chain
 - **Deterministic Merging**: Automatically merge events and context while advancing the primary domain state
-- **Type Compatibility**: runtime validation ensuring the output state of one workflow matches the input of the next
+- **Type Compatibility**: Runtime validation ensures the output state of one workflow matches the input of the next (no auto-mapping)
 
 ### Comprehensive Execution Context
 - **Metadata Collection**: Automatically track execution timing, workflow IDs, and success status
@@ -218,23 +220,6 @@ runBlocking {
 }
 ```
 
-## Publishing to Maven Central
-
-These steps assume you have an approved Sonatype namespace and a Central Portal account.
-
-1) Add credentials to `~/.gradle/gradle.properties`:
-
-```
-centralPortalUsername=YOUR_USERNAME
-centralPortalPassword=YOUR_PASSWORD
-```
-
-2) Publish:
-
-```
-./gradlew publishAllPublicationsToCentralPortal
-```
-
 ## Core Concepts
 
 ### Workflows
@@ -294,7 +279,8 @@ A UseCase is a composed set of Workflow instances that represents a complete bus
 - **Sequential Execution**: Chain workflows one after another with `startWith` and `then` methods
 - **Conditional Execution**: Use `thenIf` to conditionally execute workflows based on the results of previous steps
 - **Parallel Processing**: Execute multiple workflows concurrently using the `parallel` block to optimize performance
-- **Automatic Data Mapping**: Map outputs from one workflow to inputs of the next, with both automatic and explicit mapping options
+- **Join & Merge**: Use `parallelJoin` to fan-out/fan-in when you need merged outputs
+- **Fire-and-Forget**: Use `thenLaunch`/`awaitLaunched` for non-blocking side effects when you don’t want failures to stop the chain
 
 #### Organizational Benefits
 
@@ -460,6 +446,30 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
     )
   }
   ```
+
+##### `thenLaunch(workflow, timeout?)` and `awaitLaunched()`
+
+- **Purpose**: Fire-and-forget side-effect workflows (do not change state) that can later be awaited as a batch
+- **Usage**: Use `thenLaunch(workflow)` to start side effects without blocking; call `awaitLaunched()` to wait for all launched work, merge their events/context, and capture failures without failing the chain. Optional per-launch `timeout` bounds how long a launched workflow can run.
+- **How it works**:
+  - `thenLaunch` starts the workflow in the use case scope and returns immediately; any failures are only surfaced when you `awaitLaunched()`.
+  - `awaitLaunched()` waits for all pending launched workflows (no-op if none or already finished), merges their events/context into the current result, and records failures as `LaunchedFailureEvent` plus `context.data["launchedFailures"]` without short-circuiting the use case.
+  - State is unchanged because launched workflows are limited to side effects (`Workflow<I, I>`).
+  - Use `parallel { ... }` / `then(...)` instead if you need failures to stop the chain.
+
+Simple launch/await example:
+```kotlin
+useCase<MyCommand> {
+  startWith { cmd -> MyState(cmd.id).right() }
+  thenLaunch(LogTelemetryWorkflow("telemetry"))
+  thenLaunch(AuditWorkflow("audit"))
+  awaitLaunched() // wait for telemetry + audit; merge events/context; do not fail on their errors
+  then(NextWorkflow("next")) // continues after side effects are drained
+}
+```
+
+Cancelling launched workflows after completion:
+Launched work runs in the use case scope. If you don’t call `awaitLaunched()` before returning, you can cancel the whole scope from your caller to stop any lingering work (e.g., wrap `useCase.execute` in `withTimeout` or cancel the job). If you do await, there’s nothing left to cancel.
 
 #### Data Extraction Methods
 
