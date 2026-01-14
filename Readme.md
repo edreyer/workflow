@@ -138,10 +138,10 @@ accomplish this.
 - **Parallel Execution**: Run independent workflows concurrently to optimize performance
 - **Conditional Execution**: Use `thenIf` to dynamically control workflow execution based on previous results
 
-### Intelligent Data Mapping
-- **Automatic Property Mapping**: Connect outputs from one workflow to inputs of the next with minimal configuration
-- **Custom Property Mapping**: Use property maps or the builder pattern for explicit control over data transformation
-- **Type-Safe Transformation**: Validate data compatibility between workflow steps at runtime
+### Intelligent State Handling
+- **State-Based Transitions**: Pass typed `WorkflowState` between steps to maintain type safety throughout the chain
+- **Deterministic Merging**: Automatically merge events and context while advancing the primary domain state
+- **Type Compatibility**: runtime validation ensuring the output state of one workflow matches the input of the next
 
 ### Comprehensive Execution Context
 - **Metadata Collection**: Automatically track execution timing, workflow IDs, and success status
@@ -166,14 +166,12 @@ Here's how it looks to construct and execute a use case:
 ```kotlin
 val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
   startWith { command ->
-    Either.Right(
-      OrderDraftState(
-        orderId = command.orderId,
-        customerId = command.customerId,
-        items = command.items,
-        totalAmount = command.totalAmount
-      )
-    )
+    OrderDraftState(
+      orderId = command.orderId,
+      customerId = command.customerId,
+      items = command.items,
+      totalAmount = command.totalAmount
+    ).right()
   }
 
   then(ValidateOrderWorkflow("validate-order"))
@@ -205,7 +203,7 @@ val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
     PrepareShipmentWorkflow("prepare-shipment")
   ) {
     result ->
-      val paymentSuccessful = when (result.getFromEvent(PaymentProcessedEvent::payment)) {
+      val paymentSuccessful = when (val payment = result.getFromEvent(PaymentProcessedEvent::payment)) {
         is SuccessfulPayment -> true
         else -> false
       }
@@ -289,13 +287,13 @@ A UseCase is a composed set of Workflow instances that represents a complete bus
 
 - **Explicit Process Definition**: UseCases make your business processes visible and explicit, rather than implicit and scattered across services
 - **Composition-Based**: Built by composing multiple Workflows into a coherent sequence using a fluent DSL
-- **Flow Control**: Provides sophisticated control over the execution flow through methods like `first`, `then`, `thenIf`, and `parallel`
+- **Flow Control**: Provides sophisticated control over the execution flow through methods like `startWith`, `then`, `thenIf`, and `parallel`
 - **Single Responsibility**: Each UseCase represents one complete business capability, following the Single Responsibility Principle
 - **Error Handling**: Manages errors consistently across the entire process using type-safe error handling
 
 #### Flow Control Capabilities
 
-- **Sequential Execution**: Chain workflows one after another with `first` and `then` methods
+- **Sequential Execution**: Chain workflows one after another with `startWith` and `then` methods
 - **Conditional Execution**: Use `thenIf` to conditionally execute workflows based on the results of previous steps
 - **Parallel Processing**: Execute multiple workflows concurrently using the `parallel` block to optimize performance
 - **Automatic Data Mapping**: Map outputs from one workflow to inputs of the next, with both automatic and explicit mapping options
@@ -314,7 +312,8 @@ UseCases can be created in two ways:
 1. **Using the DSL**: The recommended approach that leverages the fluent builder pattern
    ```kotlin
    val registerUserUseCase = useCase<RegisterUserCommand> {
-     first(validateUserWorkflow)
+     startWith { command -> InitialState(command).right() }
+     then(validateUserWorkflow)
      then(createUserWorkflow)
      then(sendWelcomeEmailWorkflow)
    }
@@ -323,7 +322,7 @@ UseCases can be created in two ways:
 2. **Through Direct Implementation**: For situations requiring custom behavior beyond what the DSL provides
    ```kotlin
    class RegisterUserUseCase : UseCase<RegisterUserCommand>() {
-     override suspend fun execute(command: RegisterUserCommand): Either<WorkflowError, WorkflowResult> {
+     override suspend fun execute(command: RegisterUserCommand): Either<WorkflowError, UseCaseEvents> {
        // Custom implementation
      }
    }
@@ -438,7 +437,7 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 
 - **Purpose**: Executes side-effect workflows concurrently while keeping the primary state unchanged
 - **Usage**: Run independent workflows that observe the current state but don’t produce a new one
-- **How it works**: Executes each branch in its own coroutine, aggregates events/context, and returns the original state along with the combined metadata
+- **How it works**: Executes each branch in its own coroutine, aggregates events/context, and returns the **original state** along with the combined metadata. Any state changes within parallel branches are discarded; it is intended for side-effects like logging or independent validation.
 - **Example**:
   ```
   parallel {
@@ -475,7 +474,7 @@ These methods can be used within predicates and transformations to extract data 
 - **Purpose**: Extract a specific property from an event of a given type
 - **Usage**: Used when you need to access a property from a specific event type
 - **How it works**: Searches for the first event of type T and returns the specified property value
-- **Example**: `result.getFromEvent(UserCreatedEvent::userId)`
+- **Example**: `result.getFromEvent(UserCreatedEvent::userId) ?: throw IllegalStateException("User ID not found")`
 
 ##### `WorkflowContext.getTypedData<T>(key, default)`
 
@@ -551,15 +550,12 @@ Error handling in workflow-based applications requires careful consideration. Th
     - **Type Validation**: Triggered when source and target property types don't match in Key<T> mappings
 - **Common scenarios**:
     - Missing workflow dependencies or configuration
-    - Type mismatches in property mappings (e.g., mapping UUID to String)
-    - Auto-mapping failures when required properties cannot be resolved
-    - Invalid workflow chain construction
+    - State type mismatches between workflow steps
+    - Workflow chain setup issues (e.g. calling `startWith` twice)
 - **Handling strategy**:
     - These are typically developer errors that should be fixed in code
     - Log at ERROR level as they represent system design issues
     - Provide clear diagnostics to help identify the composition problem
-    - Consider static analysis tools to catch these at compile time
-    - **Type mismatches**: Review property mapping configurations and ensure source/target type compatibility
 
 ##### ExecutionContextError
 
@@ -936,7 +932,7 @@ thenIf(
   workflow = SendPremiumShippingWorkflow("premium-shipping"),
   predicate = { result -> 
     result.context.getTypedData<Boolean>("isPremiumCustomer") == true ||
-    result.getFromEvent(OrderValidatedEvent::totalAmount) > 100.0
+    (result.getFromEvent(OrderValidatedEvent::totalAmount) ?: 0.0) > 100.0
   }
 )
 ```

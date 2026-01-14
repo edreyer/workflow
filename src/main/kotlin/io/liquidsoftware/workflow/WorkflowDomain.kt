@@ -39,9 +39,6 @@ data class WorkflowResult<out S : WorkflowState>(
     val combinedEvents = previous.events + events
     return WorkflowResult(state, combinedEvents, combinedContext)
   }
-
-  @Deprecated("Use mergePrevious instead.")
-  fun combine(other: WorkflowResult<WorkflowState>): WorkflowResult<S> = mergePrevious(other)
 }
 
 data class WorkflowExecution(
