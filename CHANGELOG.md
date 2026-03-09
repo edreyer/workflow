@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0-SNAPSHOT - Unreleased - 2026-03-09
+
+- Added `UseCaseResult` to preserve final state, emitted events, and execution context for successful use case execution.
+- Added `UseCase.executeDetailed(...)`, `executeProjected(...)`, `executeForEvent(...)`, and `executeForState(...)` to make the library easier to use at application boundaries.
+- Added `WorkflowError.DomainError` for structured domain/business failures without flattening everything into `ExecutionError`.
+- Added `BaseEvent` as a convenience base type with generated `id` and `timestamp`.
+- Extended telemetry helpers so `toSummary(...)` works directly with detailed use case results and derives context/execution data from the result when available.
+- Preserved backwards compatibility for existing direct `UseCase` subclasses by adapting legacy `execute(...)` implementations through `EventOnlyState`.
+
 ## 0.4.0 - 2026-01-13
 
 - Added telemetry helpers (`UseCaseSummary`, `toSummary`) for consistent logging/metrics of use case results.

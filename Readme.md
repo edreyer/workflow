@@ -24,6 +24,7 @@
       * [Flow Control Capabilities](#flow-control-capabilities)
       * [Organizational Benefits](#organizational-benefits)
       * [Implementation Patterns](#implementation-patterns)
+      * [Focused Execution Methods](#focused-execution-methods)
     * [Inputs and Events](#inputs-and-events)
       * [Workflow Inputs](#workflow-inputs)
         * [Commands](#commands)
@@ -42,6 +43,7 @@
       * [`thenLaunch(workflow, timeout?)`](#thenlaunchworkflow-timeout-and-awaitlaunched)
       * [`awaitLaunched()`](#thenlaunchworkflow-timeout-and-awaitlaunched)
     * [Data Extraction Methods](#data-extraction-methods)
+        * [`WorkflowContext.get(key)`](#workflowcontextgetkey)
         * [`WorkflowResult.getFromEvent<T>(property)`](#workflowresultgetfromeventtproperty)
         * [`WorkflowContext.getTypedData<T>(key, default)`](#workflowcontextgettypeddatatkey-default)
       * [Reasoning About the DSL](#reasoning-about-the-dsl)
@@ -65,6 +67,7 @@
       * [Code Examples](#code-examples)
         * [ValidationError Example](#validationerror-example)
         * [ExecutionError Example](#executionerror-example)
+        * [DomainError Example](#domainerror-example)
         * [ExceptionError Example](#exceptionerror-example)
         * [CompositionError Example](#compositionerror-example)
   * [Best Practices](#best-practices-1)
@@ -213,9 +216,9 @@ val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
 }
 
 runBlocking {
-  val result = orderProcessingUseCase.execute(initialCommand)
+  val result = orderProcessingUseCase.executeDetailed(initialCommand)
   when (result) {
-    is Either.Right -> println("UseCase emitted ${result.value.events.size} events")
+    is Either.Right -> println("UseCase ended with state ${result.value.state} and emitted ${result.value.events.size} events")
     is Either.Left -> println("Use case failed: ${result.value}")
   }
 }
@@ -313,7 +316,134 @@ UseCases can be created in two ways:
    }
    ```
 
+For boundary-facing integrations, prefer the richer helpers:
+
+```kotlin
+val detailed = registerUserUseCase.executeDetailed(command)
+val createdEvent = registerUserUseCase.executeForEvent<UserCreatedEvent>(command)
+val finalState = registerUserUseCase.executeForState<CreatedUserState>(command)
+```
+
 By making your use cases explicit and co-locating them, you gain a clear picture of your application's capabilities and can more easily maintain, test, and evolve your business processes.
+
+#### Focused Execution Methods
+
+`execute(command)` is still available and remains the compatibility-friendly, event-only API. For new integration code, prefer the more focused execution methods that return exactly the data shape the caller needs.
+
+Use the methods like this:
+
+- `executeDetailed(command)` when the caller needs the final state, all emitted events, and workflow context
+- `executeProjected(command)` when the caller needs a custom output built from state, events, and context
+- `executeForEvent<EventType>(command)` when the caller only cares about one emitted event
+- `executeForState<StateType>(command)` when the caller only cares about the final state
+
+All of these methods also accept an optional initial `WorkflowContext`, which is useful for injecting boundary metadata such as correlation IDs:
+
+```kotlin
+val context = WorkflowContext()
+  .addData(WorkflowContext.CORRELATION_ID, request.correlationId)
+
+val result = registerUserUseCase.executeForEvent<UserRegisteredEvent>(
+  command = request.toCommand(),
+  context = context
+)
+```
+
+##### `executeDetailed(command)`
+
+Use `executeDetailed` when the boundary needs both business output and observability data. This is especially useful in adapters that log, audit, or derive telemetry from `WorkflowContext`.
+
+```kotlin
+suspend fun placeOrder(command: PlaceOrderCommand): Either<WorkflowError, OrderReceiptResponse> =
+  either {
+    val detailed = placeOrderUseCase.executeDetailed(command).bind()
+    val state = detailed.requireState<OrderPlacedState>("PlaceOrderUseCase").bind()
+
+    auditLogger.log(
+      orderId = state.orderId,
+      eventCount = detailed.events.size,
+      correlationId = detailed.context.get(WorkflowContext.CORRELATION_ID)
+    )
+
+    OrderReceiptResponse(
+      orderId = state.orderId,
+      total = state.total,
+      workflowCount = detailed.context.executions.size
+    )
+  }
+```
+
+Value: the caller gets the final typed state plus the emitted events and execution metadata in one call, with no manual plumbing.
+
+##### `executeProjected(command)`
+
+Use `executeProjected` when your boundary wants a purpose-built return type instead of exposing raw workflow primitives. This keeps controllers and ports thin without forcing them to inspect events or cast state themselves.
+
+```kotlin
+data class CheckoutResponse(
+  val orderId: UUID,
+  val paymentStatus: String,
+  val correlationId: String?
+)
+
+suspend fun checkout(command: CheckoutCommand): Either<WorkflowError, CheckoutResponse> =
+  checkoutUseCase.executeProjected(command) { result ->
+    either {
+      val state = result.requireState<CheckoutCompletedState>("CheckoutUseCase").bind()
+      val payment = result.requireLastEvent<PaymentCapturedEvent>("CheckoutUseCase").bind()
+
+      CheckoutResponse(
+        orderId = state.orderId,
+        paymentStatus = payment.status,
+        correlationId = result.context.get(WorkflowContext.CORRELATION_ID)
+      )
+    }
+  }
+```
+
+Value: the projection logic stays close to execution, and the caller receives an application-facing DTO instead of `UseCaseResult`.
+
+##### `executeForEvent<EventType>(command)`
+
+Use `executeForEvent` when the natural output of the use case is a single emitted event. This is often the cleanest fit for write APIs that want the created identifier, token, or notification payload.
+
+```kotlin
+suspend fun registerUser(request: RegisterUserRequest): Either<WorkflowError, RegisterUserResponse> =
+  registerUserUseCase
+    .executeForEvent<UserRegisteredEvent>(request.toCommand())
+    .map { event ->
+      RegisterUserResponse(
+        userId = event.userId,
+        email = event.email,
+        registeredAt = event.timestamp
+      )
+    }
+```
+
+Value: the controller does not need to inspect a list of events and guess which one is authoritative.
+
+##### `executeForState<StateType>(command)`
+
+Use `executeForState` when the final state is the real output, such as a fully enriched aggregate state or computed query model assembled by several workflows.
+
+```kotlin
+suspend fun calculateQuote(command: CalculateQuoteCommand): Either<WorkflowError, QuoteView> =
+  pricingUseCase
+    .executeForState<PricedQuoteState>(command)
+    .map { state ->
+      QuoteView(
+        quoteId = state.quoteId,
+        subtotal = state.subtotal,
+        tax = state.tax,
+        total = state.total,
+        lineItems = state.lineItems
+      )
+    }
+```
+
+Value: the caller receives the final domain state directly, without any event extraction ceremony.
+
+These focused methods are designed for application boundaries. They let each adapter ask the use case for the narrowest useful output while preserving typed workflow internals inside the library.
 
 ### Inputs and Events
 
@@ -364,7 +494,7 @@ The Workflow pattern establishes a clear flow of typed state and events:
 2. **Stateful Workflows**: Each workflow executes with the current `WorkflowState`, emits events, and returns an updated state bundled inside `WorkflowResult`.
 3. **Result Merging**: `WorkflowResult.mergePrevious` keeps previous events/context while carrying the latest state forward, maintaining deterministic ordering.
 4. **Continuation**: The next workflow in the chain receives the new state and repeats the process.
-5. **Final Events**: When the chain completes, the UseCase wraps the accumulated events in `UseCaseEvents` so callers see what happened.
+5. **Final Result**: When the chain completes, the UseCase can expose the final state, accumulated events, and context through `UseCaseResult`.
 
 This state-first model keeps the data flow explicit and reduces the need for fragile auto-mapping between workflows.
 
@@ -454,7 +584,7 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 - **Usage**: Use `thenLaunch(workflow)` to start side effects without blocking; call `awaitLaunched()` to wait for all launched work, merge their events/context, and capture failures without failing the chain. Optional per-launch `timeout` bounds how long a launched workflow can run.
 - **How it works**:
   - `thenLaunch` starts the workflow in the use case scope and returns immediately; any failures are only surfaced when you `awaitLaunched()`.
-  - `awaitLaunched()` waits for all pending launched workflows (no-op if none or already finished), merges their events/context into the current result, and records failures as `LaunchedFailureEvent` plus `context.data["launchedFailures"]` without short-circuiting the use case.
+  - `awaitLaunched()` waits for all pending launched workflows (no-op if none or already finished), merges their events/context into the current result, and records failures as `LaunchedFailureEvent` plus `WorkflowContext.LAUNCHED_FAILURES` without short-circuiting the use case.
   - State is unchanged because launched workflows are limited to side effects (`Workflow<I, I>`).
   - Use `parallel { ... }` / `then(...)` instead if you need failures to stop the chain.
 
@@ -476,6 +606,17 @@ Launched work runs in the use case scope. If you don’t call `awaitLaunched()` 
 
 These methods can be used within predicates and transformations to extract data from workflow results:
 
+##### `WorkflowContext.get(key)`
+
+- **Purpose**: Retrieve a context value using a typed `Key<T>`
+- **Usage**: Preferred API for metadata such as correlation IDs, tenant IDs, or flags passed in from an adapter
+- **How it works**: Looks up the value by key ID and checks that the runtime value matches the key’s declared type
+- **Example**:
+  ```
+  val correlationId = result.context.get(WorkflowContext.CORRELATION_ID)
+  val launchedFailures = result.context.get(WorkflowContext.LAUNCHED_FAILURES).orEmpty()
+  ```
+
 ##### `WorkflowResult.getFromEvent<T>(property)`
 
 - **Purpose**: Extract a specific property from an event of a given type
@@ -485,10 +626,12 @@ These methods can be used within predicates and transformations to extract data 
 
 ##### `WorkflowContext.getTypedData<T>(key, default)`
 
-- **Purpose**: Retrieve a value from the workflow context with type safety
-- **Usage**: Used to access data stored in the context between workflows
+- **Purpose**: Retrieve a value from the workflow context using the legacy string-key API
+- **Usage**: Useful for interoperability with existing code that still stores context data under raw string keys
 - **How it works**: Retrieves the value for the given key, cast to type T, with an optional default value
 - **Example**: `result.context.getTypedData<Boolean>("validationPassed", false)`
+
+Prefer `WorkflowContext.get(key)` for new code because it centralizes key definitions and avoids ad hoc string usage at application boundaries.
 
 #### Reasoning About the DSL
 
@@ -531,6 +674,17 @@ Error handling in workflow-based applications requires careful consideration. Th
     - Communicate the specific business constraint violation to the caller
     - Consider alternative flows or compensation actions
     - Log at WARNING level for analysis of business process friction points
+
+##### DomainError
+
+- **Purpose**: Represents structured domain or business failures that need stable machine-readable metadata.
+- **When to use**: When integrations need a durable error code and optional metadata instead of relying only on free-form messages.
+- **Characteristics**:
+    - Contains a `code`, `message`, and optional metadata map
+    - Useful at application boundaries such as controllers, API adapters, and inter-module contracts
+- **Handling strategy**:
+    - Map the `code` to transport-specific status/response behavior
+    - Preserve metadata for observability or user-facing enrichment
 
 ##### ExceptionError
 
@@ -761,6 +915,74 @@ when (val error = result.value) {
   // Other error types...
 }
 ```
+
+##### DomainError Example
+
+`DomainError` is the better choice when you need a stable business error code and structured metadata that an adapter can translate without parsing free-form text.
+
+```kotlin
+class RegisterUserWorkflow(
+  override val id: String,
+  private val userRepository: UserRepository
+) : Workflow<RegisterUserState, RegisterUserState>() {
+  override suspend fun executeWorkflow(
+    input: RegisterUserState
+  ): Either<WorkflowError, WorkflowResult<RegisterUserState>> = either {
+    val existingUser = userRepository.findByEmail(input.email)
+
+    if (existingUser != null) {
+      raise(
+        WorkflowError.DomainError(
+          code = "USER_ALREADY_EXISTS",
+          message = "A user with email ${input.email} already exists",
+          metadata = mapOf(
+            "email" to input.email,
+            "existingUserId" to existingUser.id.toString()
+          )
+        )
+      )
+    }
+
+    val createdUser = userRepository.create(input.email, input.passwordHash)
+    val event = UserRegisteredEvent(
+      userId = createdUser.id,
+      email = createdUser.email
+    )
+
+    WorkflowResult(
+      state = input.copy(userId = createdUser.id),
+      events = listOf(event)
+    )
+  }
+}
+
+// In a web adapter or module boundary
+when (val result = registerUserUseCase.executeForEvent<UserRegisteredEvent>(command)) {
+  is Either.Right -> ResponseEntity.ok(
+    RegisterUserResponse(
+      userId = result.value.userId,
+      email = result.value.email
+    )
+  )
+  is Either.Left -> when (val error = result.value) {
+    is WorkflowError.DomainError -> when (error.code) {
+      "USER_ALREADY_EXISTS" -> ResponseEntity.status(HttpStatus.CONFLICT).body(
+        ErrorResponse(
+          code = error.code,
+          message = error.message,
+          details = error.metadata
+        )
+      )
+      else -> ResponseEntity.badRequest().body(
+        ErrorResponse(error.code, error.message)
+      )
+    }
+    else -> throw IllegalStateException("Unhandled workflow error: $error")
+  }
+}
+```
+
+Value: your workflow exposes a domain-shaped failure, and the boundary can translate it into HTTP, messaging, or inter-module contracts using the error code and metadata directly.
 
 ##### ExceptionError Example
 

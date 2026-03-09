@@ -349,17 +349,23 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
     val pipelineSteps = steps.toList()
 
     return object : UseCase<C>() {
-      override suspend fun execute(command: C): Either<WorkflowError, UseCaseEvents> = either {
+      override suspend fun executeDetailed(
+        command: C,
+        context: WorkflowContext
+      ): Either<WorkflowError, UseCaseResult<WorkflowState>> = either {
         val initialState = startFactory(command).bind()
-        val initialResult = WorkflowResult(initialState)
+        val initialResult = WorkflowResult(initialState, context = context)
         @Suppress("UNCHECKED_CAST")
         val start: Either<WorkflowError, WorkflowResult<WorkflowState>> =
           Either.Right(initialResult) as Either<WorkflowError, WorkflowResult<WorkflowState>>
         val finalResult = pipelineSteps.fold(start) { acc, step ->
           acc.flatMap { current -> step.execute(current) }
         }.bind()
-        UseCaseEvents(finalResult.events)
+        finalResult.toUseCaseResult()
       }
+
+      override suspend fun execute(command: C): Either<WorkflowError, UseCaseEvents> =
+        executeDetailed(command).map { it.toUseCaseEvents() }
     }
   }
 }
@@ -376,7 +382,7 @@ private class SequentialStep<I : WorkflowState, O : WorkflowState>(
   ): Either<WorkflowError, WorkflowResult<WorkflowState>> {
     return castState(result.state, workflow)
       .flatMap { input ->
-        workflow.execute(input).map { next -> next.mergePrevious(result) }
+        workflow.execute(input, result.context).map { next -> next.mergePrevious(result) }
       }
   }
 }
@@ -393,7 +399,7 @@ private class ConditionalStep<I : WorkflowState, O : WorkflowState>(
     } else {
       castState(result.state, workflow)
         .flatMap { input ->
-          workflow.execute(input).map { next -> next.mergePrevious(result) }
+          workflow.execute(input, result.context).map { next -> next.mergePrevious(result) }
         }
     }
   }
@@ -424,7 +430,7 @@ private class ParallelSideEffectStep<I : WorkflowState>(
       { value -> value }
     )
     val deferredResults = workflows.map { workflow ->
-      async { workflow.execute(input) }
+      async { workflow.execute(input, result.context) }
     }
     val results = deferredResults.awaitAll()
     val firstError = results.filterIsInstance<Either.Left<WorkflowError>>().firstOrNull()
@@ -460,9 +466,9 @@ private class LaunchStep<I : WorkflowState>(
     val deferred: Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>> = async {
       try {
         val execution = if (timeout != null) {
-          withTimeout(timeout.toMillis()) { workflow.execute(input) }
+          withTimeout(timeout.toMillis()) { workflow.execute(input, result.context) }
         } else {
-          workflow.execute(input)
+          workflow.execute(input, result.context)
         }
         execution
       } catch (ex: CancellationException) {
@@ -491,7 +497,10 @@ private class AwaitLaunchedStep(
       pending.forEach { it.cancel() }
       return Either.Right(
         result.copy(
-          context = result.context.addData("launchedFailures", listOf("awaitLaunched failure: ${ex.message}"))
+          context = result.context.addData(
+            WorkflowContext.LAUNCHED_FAILURES,
+            listOf("awaitLaunched failure: ${ex.message}")
+          )
         )
       )
     }
@@ -519,7 +528,7 @@ private class AwaitLaunchedStep(
       }
     }
     val contextWithFailures = if (failureMessages.isEmpty()) mergedContext
-      else mergedContext.addData("launchedFailures", failureMessages)
+      else mergedContext.addData(WorkflowContext.LAUNCHED_FAILURES, failureMessages)
     return Either.Right(
       WorkflowResult(
         state = result.state,
