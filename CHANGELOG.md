@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0-SNAPSHOT - Unreleased - 2026-03-09
+## 0.5.0 - 2026-03-09
 
 - Added `UseCaseResult` to preserve final state, emitted events, and execution context for successful use case execution.
 - Added `UseCase.executeDetailed(...)`, `executeProjected(...)`, `executeForEvent(...)`, and `executeForState(...)` to make the library easier to use at application boundaries.
