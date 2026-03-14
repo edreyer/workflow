@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 - 2026-03-14
+
+- Added `TypedUseCase` and `ContextualTypedUseCase` for exposing workflow-backed application/module use cases without repetitive adapter classes.
+- Added `UseCase.toStateUseCase(...)` overloads for raw and mapped error handling with explicit input/output adaptation.
+- Added `UseCase.toEventUseCase(...)` overloads for raw and mapped error handling with event-based projection semantics aligned with `executeForEvent(...)`.
+
 ## 0.5.0 - 2026-03-09
 
 - Added `UseCaseResult` to preserve final state, emitted events, and execution context for successful use case execution.

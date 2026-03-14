@@ -88,3 +88,120 @@ This reads like the use case itself:
 - Better testability: test individual workflows in isolation and test the full use case as a composed unit.
 
 If your service layer is turning into a web of hidden business logic, `workflow` gives you a way to model what your application does directly in code.
+
+## Expose Use Cases At Application Boundaries
+
+Defining the workflow is only part of the problem. Real applications also need to expose that workflow at a module, web, CLI, or job boundary.
+
+That boundary usually needs to do four things:
+
+- map public input into an internal `UseCaseCommand`
+- choose state or event projection
+- map `WorkflowError` into a boundary error type
+- map the final internal result into a public output
+
+`workflow` now supports that directly with `TypedUseCase` and `ContextualTypedUseCase`.
+
+That means the same use case can stay explicit all the way out to the application edge:
+
+```kotlin
+val registerUser: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
+  useCase<RegisterUserInternalCommand> {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
+  }.toStateUseCase(
+    inputMapper = ::RegisterUserInternalCommand,
+    errorMapper = WorkflowError::toApplicationError,
+    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
+  )
+```
+
+The workflow stays visible. The boundary stays typed. The repetitive adapter code disappears.
+
+## Typed Boundary Use Cases
+
+The core boundary abstractions are:
+
+```kotlin
+fun interface TypedUseCase<I, E, O> {
+  suspend operator fun invoke(input: I): Either<E, O>
+}
+
+fun interface ContextualTypedUseCase<I, E, O> : TypedUseCase<I, E, O> {
+  suspend operator fun invoke(input: I, context: WorkflowContext): Either<E, O>
+
+  override suspend fun invoke(input: I): Either<E, O> =
+    invoke(input, WorkflowContext())
+}
+```
+
+Use `TypedUseCase` when the caller only needs input. Use `ContextualTypedUseCase` when the caller may need to pass correlation IDs or other initial workflow context.
+
+## State Projection
+
+Use `toStateUseCase(...)` when the public result comes from the final workflow state.
+
+```kotlin
+val registerUser: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
+  useCase<RegisterUserInternalCommand> {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
+  }.toStateUseCase(
+    inputMapper = ::RegisterUserInternalCommand,
+    errorMapper = WorkflowError::toApplicationError,
+    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
+  )
+```
+
+If raw workflow errors are acceptable, use the overload without `errorMapper`:
+
+```kotlin
+val registerUser: ContextualTypedUseCase<RegisterUserCommand, WorkflowError, UserDto> =
+  useCase<RegisterUserInternalCommand> {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
+  }.toStateUseCase(
+    inputMapper = ::RegisterUserInternalCommand,
+    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
+  )
+```
+
+`errorMapper` is expected to be total and non-throwing. If you want to preserve raw workflow errors, prefer the overload without `errorMapper`.
+
+## Event Projection
+
+Use `toEventUseCase(...)` when the public result is driven by an emitted event.
+
+Event projection follows the same semantics as `executeForEvent(...)`: it returns the last emitted event of the requested type.
+
+```kotlin
+val registerUserCreatedEvent: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserCreatedEvent> =
+  useCase<RegisterUserInternalCommand> {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
+  }.toEventUseCase(
+    inputMapper = ::RegisterUserInternalCommand,
+    errorMapper = WorkflowError::toApplicationError,
+    outputMapper = { event: UserCreatedEvent -> event },
+  )
+```
+
+## Passing Workflow Context
+
+If the boundary needs correlation or request metadata, invoke the contextual overload:
+
+```kotlin
+val result =
+  registerUser(
+    RegisterUserCommand(...),
+    WorkflowContext().addData(WorkflowContext.CORRELATION_ID, "corr-123")
+  )
+```
+
+If you do not supply context, the adapter uses the library's normal empty `WorkflowContext`.
+
+Taken together, this lets `workflow` model not only the internal orchestration of a business flow, but also the typed boundary that real applications need to expose that flow cleanly.

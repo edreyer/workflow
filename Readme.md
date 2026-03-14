@@ -25,6 +25,7 @@
       * [Organizational Benefits](#organizational-benefits)
       * [Implementation Patterns](#implementation-patterns)
       * [Focused Execution Methods](#focused-execution-methods)
+      * [Typed Boundary Use Cases](#typed-boundary-use-cases)
     * [Inputs and Events](#inputs-and-events)
       * [Workflow Inputs](#workflow-inputs)
         * [Commands](#commands)
@@ -444,6 +445,92 @@ suspend fun calculateQuote(command: CalculateQuoteCommand): Either<WorkflowError
 Value: the caller receives the final domain state directly, without any event extraction ceremony.
 
 These focused methods are designed for application boundaries. They let each adapter ask the use case for the narrowest useful output while preserving typed workflow internals inside the library.
+
+#### Typed Boundary Use Cases
+
+In many real applications, the workflow itself is not the awkward part. The awkward part is exposing that workflow at a module, web, CLI, or job boundary without writing the same adapter code over and over.
+
+That adapter usually has to do four things:
+
+- map public input into an internal `UseCaseCommand`
+- choose state or event projection
+- map `WorkflowError` into a boundary error type
+- map the final internal state or event into a public output
+
+`workflow` supports that directly with `TypedUseCase` and `ContextualTypedUseCase`.
+
+```kotlin
+fun interface TypedUseCase<I, E, O> {
+  suspend operator fun invoke(input: I): Either<E, O>
+}
+
+fun interface ContextualTypedUseCase<I, E, O> : TypedUseCase<I, E, O> {
+  suspend operator fun invoke(input: I, context: WorkflowContext): Either<E, O>
+
+  override suspend fun invoke(input: I): Either<E, O> =
+    invoke(input, WorkflowContext())
+}
+```
+
+Use `toStateUseCase(...)` when the public result should be derived from the final workflow state:
+
+```kotlin
+val registerUser: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
+  useCase<RegisterUserInternalCommand> {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
+  }.toStateUseCase(
+    inputMapper = ::RegisterUserInternalCommand,
+    errorMapper = WorkflowError::toApplicationError,
+    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
+  )
+```
+
+Use `toEventUseCase(...)` when the natural boundary result is an emitted event:
+
+```kotlin
+val registerUserEvent: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserRegisteredEvent> =
+  useCase<RegisterUserInternalCommand> {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
+  }.toEventUseCase(
+    inputMapper = ::RegisterUserInternalCommand,
+    errorMapper = WorkflowError::toApplicationError,
+    outputMapper = { event: UserRegisteredEvent -> event },
+  )
+```
+
+If raw workflow errors are acceptable, use the overload without an `errorMapper`:
+
+```kotlin
+val registerUser: ContextualTypedUseCase<RegisterUserCommand, WorkflowError, UserDto> =
+  useCase<RegisterUserInternalCommand> {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
+  }.toStateUseCase(
+    inputMapper = ::RegisterUserInternalCommand,
+    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
+  )
+```
+
+`errorMapper` is expected to be total and non-throwing. If you need raw workflow errors, prefer the overload without `errorMapper`.
+
+Event projection follows the same semantics as `executeForEvent(...)`: the adapter selects the last emitted event of the requested type. State projection follows the same semantics as `executeForState(...)`: the adapter requires the final state to match the requested type.
+
+When the boundary needs correlation IDs or other request-scoped metadata, pass an initial `WorkflowContext` at invocation time:
+
+```kotlin
+val result =
+  registerUser(
+    RegisterUserCommand(...),
+    WorkflowContext().addData(WorkflowContext.CORRELATION_ID, "corr-123")
+  )
+```
+
+Value: your workflow remains explicit and reusable, while the library handles the repetitive boundary glue that normally sits around it.
 
 ### Inputs and Events
 
