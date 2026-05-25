@@ -4,7 +4,7 @@
 
 - Replaced the v0.6.0 typed-boundary API with a single callable `UseCase<I, E, O>` model.
 - Changed the primary `useCase { ... }` DSL to define public input, workflow steps, error mapping, and output projection in one place.
-- Removed the separate `adaptedUseCase { ... }` layer and the `input { ... }` command-to-command mapping step.
+- Removed the v0.6.0 typed-boundary adapter helpers (`TypedUseCase`, `ContextualTypedUseCase`, `toStateUseCase(...)`, and `toEventUseCase(...)`); boundary mapping now lives in `useCase { ... }` through `startWith`, `errors`, and `result`.
 - Added `state<StateType>()` and `event<EventType>()` result sources for explicit state and event projection inside use case definitions.
 - Renamed the lower-level workflow-native execution model to `WorkflowUseCase` and exposed it through `workflowUseCase { ... }`.
 - Moved workflow-native execution methods such as `executeDetailed(...)`, `executeProjected(...)`, `executeForEvent(...)`, and `executeForState(...)` onto `WorkflowUseCase`; application-facing `UseCase<I, E, O>` values are invoked directly.
