@@ -96,98 +96,101 @@ Defining the workflow is only part of the problem. Real applications also need t
 That boundary usually needs to do four things:
 
 - map public input into an internal `UseCaseCommand`
-- choose state or event projection
+- choose whether the public result comes from the final state or an emitted event
 - map `WorkflowError` into a boundary error type
 - map the final internal result into a public output
 
-`workflow` now supports that directly with `TypedUseCase` and `ContextualTypedUseCase`.
+`workflow` now supports that directly with `adaptedUseCase`.
 
 That means the same use case can stay explicit all the way out to the application edge:
 
 ```kotlin
-val registerUser: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
-  useCase<RegisterUserInternalCommand> {
-    startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-  }.toStateUseCase(
-    inputMapper = ::RegisterUserInternalCommand,
-    errorMapper = WorkflowError::toApplicationError,
-    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
-  )
+val registerUser: AdaptedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
+  adaptedUseCase(
+    errors = WorkflowError::toApplicationError,
+  ) {
+    input(::RegisterUserInternalCommand)
+    workflow {
+      startWith { command -> command.toValidatedState() }
+      then(HashPasswordStep(passwordHasher))
+      then(PersistUserStep(userRepository, userIdGenerator))
+    }
+    result(state<RegisteredUserState>()) { state -> state.user.toDto() }
+  }
 ```
 
 The workflow stays visible. The boundary stays typed. The repetitive adapter code disappears.
 
-## Typed Boundary Use Cases
+## Adapted Use Cases
 
 The core boundary abstractions are:
 
 ```kotlin
-fun interface TypedUseCase<I, E, O> {
-  suspend operator fun invoke(input: I): Either<E, O>
-}
-
-fun interface ContextualTypedUseCase<I, E, O> : TypedUseCase<I, E, O> {
+fun interface AdaptedUseCase<I, E, O> {
   suspend operator fun invoke(input: I, context: WorkflowContext): Either<E, O>
 
-  override suspend fun invoke(input: I): Either<E, O> =
+  suspend operator fun invoke(input: I): Either<E, O> =
     invoke(input, WorkflowContext())
 }
 ```
 
-Use `TypedUseCase` when the caller only needs input. Use `ContextualTypedUseCase` when the caller may need to pass correlation IDs or other initial workflow context.
+Use `useCase` for raw workflow-native execution. Use `adaptedUseCase` when application code needs a callable use case with public input, boundary errors, and public output.
 
 ## State Projection
 
-Use `toStateUseCase(...)` when the public result comes from the final workflow state.
+Use `adaptedUseCase(errors = ...) { ... }` with `state<StateType>()` when the public result comes from the final workflow state and errors should be mapped to an application type.
 
 ```kotlin
-val registerUser: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
-  useCase<RegisterUserInternalCommand> {
-    startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-  }.toStateUseCase(
-    inputMapper = ::RegisterUserInternalCommand,
-    errorMapper = WorkflowError::toApplicationError,
-    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
-  )
+val registerUser: AdaptedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
+  adaptedUseCase(
+    errors = WorkflowError::toApplicationError,
+  ) {
+    input(::RegisterUserInternalCommand)
+    workflow {
+      startWith { command -> command.toValidatedState() }
+      then(HashPasswordStep(passwordHasher))
+      then(PersistUserStep(userRepository, userIdGenerator))
+    }
+    result(state<RegisteredUserState>()) { state -> state.user.toDto() }
+  }
 ```
 
-If raw workflow errors are acceptable, use the overload without `errorMapper`:
+If raw workflow errors are acceptable, omit `errors = ...`:
 
 ```kotlin
-val registerUser: ContextualTypedUseCase<RegisterUserCommand, WorkflowError, UserDto> =
-  useCase<RegisterUserInternalCommand> {
-    startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-  }.toStateUseCase(
-    inputMapper = ::RegisterUserInternalCommand,
-    outputMapper = { state: RegisteredUserState -> state.user.toDto() },
-  )
+val registerUser: AdaptedUseCase<RegisterUserCommand, WorkflowError, UserDto> =
+  adaptedUseCase {
+    input(::RegisterUserInternalCommand)
+    workflow {
+      startWith { command -> command.toValidatedState() }
+      then(HashPasswordStep(passwordHasher))
+      then(PersistUserStep(userRepository, userIdGenerator))
+    }
+    result(state<RegisteredUserState>()) { state -> state.user.toDto() }
+  }
 ```
 
-`errorMapper` is expected to be total and non-throwing. If you want to preserve raw workflow errors, prefer the overload without `errorMapper`.
+The `errors = ...` mapper is expected to be total and non-throwing. If you want to preserve raw workflow errors, omit it.
 
 ## Event Projection
 
-Use `toEventUseCase(...)` when the public result is driven by an emitted event.
+Use `event<EventType>()` when the public result is driven by an emitted event.
 
 Event projection follows the same semantics as `executeForEvent(...)`: it returns the last emitted event of the requested type.
 
 ```kotlin
-val registerUserCreatedEvent: ContextualTypedUseCase<RegisterUserCommand, ApplicationError, UserCreatedEvent> =
-  useCase<RegisterUserInternalCommand> {
-    startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-  }.toEventUseCase(
-    inputMapper = ::RegisterUserInternalCommand,
-    errorMapper = WorkflowError::toApplicationError,
-    outputMapper = { event: UserCreatedEvent -> event },
-  )
+val registerUserCreatedEvent: AdaptedUseCase<RegisterUserCommand, ApplicationError, UserCreatedEvent> =
+  adaptedUseCase(
+    errors = WorkflowError::toApplicationError,
+  ) {
+    input(::RegisterUserInternalCommand)
+    workflow {
+      startWith { command -> command.toValidatedState() }
+      then(HashPasswordStep(passwordHasher))
+      then(PersistUserStep(userRepository, userIdGenerator))
+    }
+    result(event<UserCreatedEvent>()) { event -> event }
+  }
 ```
 
 ## Passing Workflow Context

@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.liquidsoftware"
-version = "0.6.0"
+version = "0.7.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
@@ -89,9 +89,9 @@ signing {
 }
 
 nmcp {
-    publishAllPublications {
-        username = providers.gradleProperty("centralPortalUsername")
-        password = providers.gradleProperty("centralPortalPassword")
-        publicationType = "AUTOMATIC"
+    publishAllPublicationsToCentralPortal {
+        username.set(providers.gradleProperty("centralPortalUsername"))
+        password.set(providers.gradleProperty("centralPortalPassword"))
+        publishingType.set("AUTOMATIC")
     }
 }

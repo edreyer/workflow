@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 - Unreleased
+
+- Replaced the v0.6.0 typed-boundary API with `AdaptedUseCase`.
+- Added `adaptedUseCase { ... }` and `adaptedUseCase(errors = ...) { ... }` for building callable application-boundary use cases.
+- Added `state<StateType>()` and `event<EventType>()` result sources for explicit state and event projection inside adapted use case definitions.
+- Added a migration guide for upgrading v0.6.0 typed-boundary use cases to the new adapted use case DSL.
+
 ## 0.6.0 - 2026-03-14
 
 - Added `TypedUseCase` and `ContextualTypedUseCase` for exposing workflow-backed application/module use cases without repetitive adapter classes.
