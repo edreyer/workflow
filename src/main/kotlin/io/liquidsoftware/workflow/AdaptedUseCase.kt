@@ -74,12 +74,15 @@ class AdaptedUseCaseBuilder<I, C : UseCaseCommand, O> {
     resultProjection = source.toProjection(mapper)
   }
 
-  internal fun <E> build(errorMapper: (WorkflowError) -> E): AdaptedUseCase<I, E, O> {
+  internal fun <E> build(
+    name: String?,
+    errorMapper: (WorkflowError) -> E
+  ): AdaptedUseCase<I, E, O> {
     val inputMapper = requireNotNull(inputMapper) { "adaptedUseCase input mapper is required" }
     val workflowFactory = requireNotNull(workflowFactory) { "adaptedUseCase workflow is required" }
     val resultProjection = requireNotNull(resultProjection) { "adaptedUseCase result projection is required" }
-    val rawUseCase = useCase(workflowFactory)
-    val useCaseName = rawUseCase::class.simpleName ?: "UseCase"
+    val rawUseCase = useCase(name, workflowFactory)
+    val useCaseName = rawUseCase.name
 
     return AdaptedUseCase { input, context ->
       mapInput(inputMapper, input)
@@ -99,13 +102,17 @@ class AdaptedUseCaseBuilder<I, C : UseCaseCommand, O> {
  * Use this overload when callers are expected to handle workflow-native errors.
  * If the boundary should expose an application-specific error type, use the
  * overload with `errors = ...`.
+ *
+ * @param name Optional safe operational name forwarded to the underlying [UseCase]
+ * for debug-level invocation logs. Do not include user data or request data.
  */
 fun <I, C : UseCaseCommand, O> adaptedUseCase(
+  name: String? = null,
   configure: AdaptedUseCaseBuilder<I, C, O>.() -> Unit,
 ): AdaptedUseCase<I, WorkflowError, O> {
   val builder = AdaptedUseCaseBuilder<I, C, O>()
   builder.configure()
-  return builder.build { error -> error }
+  return builder.build(name) { error -> error }
 }
 
 /**
@@ -113,14 +120,18 @@ fun <I, C : UseCaseCommand, O> adaptedUseCase(
  *
  * The [errors] mapper should be total and non-throwing. It is applied to
  * workflow execution errors and result-projection errors.
+ *
+ * @param name Optional safe operational name forwarded to the underlying [UseCase]
+ * for debug-level invocation logs. Do not include user data or request data.
  */
 fun <I, C : UseCaseCommand, E, O> adaptedUseCase(
+  name: String? = null,
   errors: (WorkflowError) -> E,
   configure: AdaptedUseCaseBuilder<I, C, O>.() -> Unit,
 ): AdaptedUseCase<I, E, O> {
   val builder = AdaptedUseCaseBuilder<I, C, O>()
   builder.configure()
-  return builder.build(errors)
+  return builder.build(name, errors)
 }
 
 /**

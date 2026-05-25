@@ -210,8 +210,11 @@ class WorkflowChainTest {
   @Test
   fun `executeForEvent should return composition error when event missing`() {
     val useCase = object : UseCase<TestCommand>() {
-      override suspend fun execute(command: TestCommand): Either<WorkflowError, UseCaseEvents> =
-        Either.Right(UseCaseEvents(emptyList()))
+      override suspend fun executeUseCase(
+        command: TestCommand,
+        context: WorkflowContext
+      ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
+        Either.Right(UseCaseResult(EventOnlyState, emptyList(), context))
     }
 
     val result = runBlocking { useCase.executeForEvent<StepEvent>(TestCommand(UUID.randomUUID())) }
@@ -224,10 +227,15 @@ class WorkflowChainTest {
   @Test
   fun `executeForState should return composition error when legacy use case has no typed state`() {
     val useCase = object : UseCase<TestCommand>() {
-      override suspend fun execute(command: TestCommand): Either<WorkflowError, UseCaseEvents> =
+      override suspend fun executeUseCase(
+        command: TestCommand,
+        context: WorkflowContext
+      ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
         Either.Right(
-          UseCaseEvents(
-            listOf(StepEvent(UUID.randomUUID(), Instant.now(), "legacy"))
+          UseCaseResult(
+            EventOnlyState,
+            listOf(StepEvent(UUID.randomUUID(), Instant.now(), "legacy")),
+            context
           )
         )
     }
@@ -240,12 +248,17 @@ class WorkflowChainTest {
   }
 
   @Test
-  fun `legacy direct use case subclasses should still support executeDetailed`() {
+  fun `direct use case subclasses should still support executeDetailed`() {
     val useCase = object : UseCase<TestCommand>() {
-      override suspend fun execute(command: TestCommand): Either<WorkflowError, UseCaseEvents> =
+      override suspend fun executeUseCase(
+        command: TestCommand,
+        context: WorkflowContext
+      ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
         Either.Right(
-          UseCaseEvents(
-            listOf(StepEvent(UUID.randomUUID(), Instant.now(), "legacy"))
+          UseCaseResult(
+            EventOnlyState,
+            listOf(StepEvent(UUID.randomUUID(), Instant.now(), "legacy")),
+            context
           )
         )
     }

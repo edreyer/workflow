@@ -26,12 +26,14 @@ dependencies {
     implementation(libs.arrow.fx.coroutines)
     implementation(libs.arrow.resilience)
     implementation(libs.jsoup)
+    implementation(libs.slf4j.api)
 
     // Testing
     testImplementation(kotlin("test"))
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.kotest.framework.engine)
+    testImplementation(libs.logback.classic)
 }
 
 tasks.test {

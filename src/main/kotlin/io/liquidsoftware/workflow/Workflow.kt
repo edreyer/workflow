@@ -4,6 +4,8 @@ import arrow.core.Either
 import arrow.core.flatMap
 import arrow.core.raise.either
 import io.liquidsoftware.workflow.WorkflowError.ExceptionError
+import org.slf4j.LoggerFactory
+import java.time.Duration
 import java.time.Instant
 import kotlin.reflect.KClass
 
@@ -57,12 +59,33 @@ abstract class Workflow<in I : WorkflowState, out O : WorkflowState> {
   }
 }
 
-abstract class UseCase<C : UseCaseCommand> {
+/**
+ * Public execution model for an application use case.
+ *
+ * Use cases emit debug-level invocation logs through SLF4J. Logs include only
+ * operational metadata such as the configured use-case name, success/failure
+ * outcome, duration, event count, and workflow count. Command input, state,
+ * event payloads, projected output, and error messages are intentionally not logged.
+ *
+ * @param configuredName Optional safe name used in invocation logs and projection errors.
+ */
+abstract class UseCase<C : UseCaseCommand>(
+  private val configuredName: String? = null
+) {
   /**
-   * Legacy execution method that returns only the list of emitted events.
-   * Existing direct subclasses can continue implementing this method.
+   * Safe operational name for this use case.
    */
-  abstract suspend fun execute(command: C): Either<WorkflowError, UseCaseEvents>
+  val name: String
+    get() = configuredName ?: this::class.simpleName ?: "UseCase"
+
+  /**
+   * Implements the use case. Subclasses provide behavior here so public execution methods
+   * can consistently apply cross-cutting behavior such as safe invocation logging.
+   */
+  protected abstract suspend fun executeUseCase(
+    command: C,
+    context: WorkflowContext
+  ): Either<WorkflowError, UseCaseResult<WorkflowState>>
 
   /**
    * Executes the use case and returns a detailed [UseCaseResult] containing the final state,
@@ -71,15 +94,32 @@ abstract class UseCase<C : UseCaseCommand> {
    * @param command The input command for the use case.
    * @param context An optional initial [WorkflowContext] (e.g., containing correlation IDs).
    *
-   * The default implementation preserves backwards compatibility for direct [UseCase] subclasses
-   * by adapting event-only results into an [EventOnlyState]. DSL-built use cases override this
-   * with the actual final state.
+   * Emits debug logs before and after execution without logging command, state, or event payload data.
    */
-  open suspend fun executeDetailed(
+  suspend fun executeDetailed(
     command: C,
     context: WorkflowContext = WorkflowContext()
-  ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
-    execute(command).map { UseCaseResult(EventOnlyState, it.events, context) }
+  ): Either<WorkflowError, UseCaseResult<WorkflowState>> {
+    val startTime = Instant.now()
+    logUseCaseStarted(name)
+    val result = executeUseCase(command, context)
+    val duration = Duration.between(startTime, Instant.now())
+    logUseCaseFinished(name, result.isRight(), duration, result.logMetadata())
+    return result
+  }
+
+  /**
+   * Executes the use case and returns only the emitted events.
+   */
+  suspend fun execute(command: C): Either<WorkflowError, UseCaseEvents> {
+    val startTime = Instant.now()
+    logUseCaseStarted(name)
+    val detailed = executeUseCase(command, WorkflowContext())
+    val result = detailed.map { it.toUseCaseEvents() }
+    val duration = Duration.between(startTime, Instant.now())
+    logUseCaseFinished(name, result.isRight(), duration, detailed.logMetadata())
+    return result
+  }
 
   /**
    * Executes the use case and applies a [projector] function to the result.
@@ -93,8 +133,15 @@ abstract class UseCase<C : UseCaseCommand> {
     command: C,
     context: WorkflowContext = WorkflowContext(),
     projector: (UseCaseResult<WorkflowState>) -> Either<WorkflowError, O>
-  ): Either<WorkflowError, O> =
-    executeDetailed(command, context).flatMap(projector)
+  ): Either<WorkflowError, O> {
+    val startTime = Instant.now()
+    logUseCaseStarted(name)
+    val detailed = executeUseCase(command, context)
+    val result = detailed.flatMap(projector)
+    val duration = Duration.between(startTime, Instant.now())
+    logUseCaseFinished(name, result.isRight(), duration, detailed.logMetadata())
+    return result
+  }
 
   /**
    * Executes the use case and returns the last emitted event of type [E].
@@ -109,8 +156,7 @@ abstract class UseCase<C : UseCaseCommand> {
     command: C,
     context: WorkflowContext = WorkflowContext()
   ): Either<WorkflowError, E> {
-    val useCaseName = this::class.simpleName ?: "UseCase"
-    return executeProjected(command, context) { it.requireLastEvent(useCaseName) }
+    return executeProjected(command, context) { it.requireLastEvent(name) }
   }
 
   /**
@@ -126,9 +172,54 @@ abstract class UseCase<C : UseCaseCommand> {
     command: C,
     context: WorkflowContext = WorkflowContext()
   ): Either<WorkflowError, S> {
-    val useCaseName = this::class.simpleName ?: "UseCase"
-    return executeProjected(command, context) { it.requireState(useCaseName) }
+    return executeProjected(command, context) { it.requireState(name) }
   }
 }
 
 data object EventOnlyState : WorkflowState
+
+private val useCaseLogger = LoggerFactory.getLogger("io.liquidsoftware.workflow.UseCase")
+
+private fun logUseCaseStarted(useCaseName: String) {
+  if (useCaseLogger.isDebugEnabled) {
+    useCaseLogger.debug("UseCase invocation started name={}", useCaseName)
+  }
+}
+
+private fun logUseCaseFinished(
+  useCaseName: String,
+  succeeded: Boolean,
+  duration: Duration,
+  metadata: UseCaseLogMetadata,
+) {
+  if (!useCaseLogger.isDebugEnabled) {
+    return
+  }
+
+  useCaseLogger.debug(
+    "UseCase invocation finished name={} outcome={} durationMs={} events={} workflows={}",
+    useCaseName,
+    if (succeeded) "success" else "failure",
+    duration.toMillis(),
+    metadata.eventsCount,
+    metadata.workflowCount
+  )
+}
+
+private data class UseCaseLogMetadata(
+  val eventsCount: Int,
+  val workflowCount: Int,
+)
+
+private fun Either<WorkflowError, UseCaseResult<WorkflowState>>.logMetadata(): UseCaseLogMetadata =
+  fold(
+    { error -> UseCaseLogMetadata(eventsCount = 0, workflowCount = error.workflowExecutionCount()) },
+    { result -> UseCaseLogMetadata(eventsCount = result.events.size, workflowCount = result.context.executions.size) }
+  )
+
+private fun WorkflowError.workflowExecutionCount(): Int =
+  when (this) {
+    is WorkflowError.ExecutionContextError -> 1
+    is WorkflowError.ChainError -> error.workflowExecutionCount()
+    else -> 0
+  }

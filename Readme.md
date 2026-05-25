@@ -154,6 +154,7 @@ accomplish this.
 - **Context Sharing**: Share non-domain data between workflows through the WorkflowContext
 - **Execution History**: Maintain a complete audit trail of all executed workflows within a use case (including failure metadata via ExecutionContextError)
 - **Observability Helpers**: Build use case summaries for logging/metrics via `toSummary` if desired
+- **Safe Invocation Logging**: Use cases emit debug-level SLF4J logs with the use-case name, outcome, duration, event count, and workflow count. Command input, state, event payloads, projected output, and error messages are not logged.
 
 ### Robust Error Handling
 - **Exception-Free Execution**: Workflow execution returns typed Either values; DSL misuse throws configuration errors
@@ -171,7 +172,7 @@ accomplish this.
 Here's how it looks to construct and execute a use case:
 
 ```kotlin
-val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
+val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase(name = "ProcessOrder") {
   startWith { command ->
     OrderDraftState(
       orderId = command.orderId,
@@ -300,7 +301,7 @@ UseCases can be created in two ways:
 
 1. **Using the DSL**: The recommended approach that leverages the fluent builder pattern
    ```kotlin
-   val registerUserUseCase = useCase<RegisterUserCommand> {
+   val registerUserUseCase = useCase<RegisterUserCommand>(name = "RegisterUser") {
      startWith { command -> InitialState(command).right() }
      then(validateUserWorkflow)
      then(createUserWorkflow)
@@ -319,8 +320,11 @@ UseCases can be created in two ways:
 
 2. **Through Direct Implementation**: For situations requiring custom behavior beyond what the DSL provides
    ```kotlin
-   class RegisterUserUseCase : UseCase<RegisterUserCommand>() {
-     override suspend fun execute(command: RegisterUserCommand): Either<WorkflowError, UseCaseEvents> {
+   class RegisterUserUseCase : UseCase<RegisterUserCommand>("RegisterUser") {
+     override suspend fun executeUseCase(
+       command: RegisterUserCommand,
+       context: WorkflowContext
+     ): Either<WorkflowError, UseCaseResult<WorkflowState>> {
        // Custom implementation
      }
    }
@@ -331,6 +335,7 @@ For application or module boundaries, use `adaptedUseCase { ... }` so callers ca
 ```kotlin
 val registerUser =
   adaptedUseCase<RegisterUserCommand, RegisterUserWorkflowCommand, ApplicationError, UserDto>(
+    name = "RegisterUser",
     errors = WorkflowError::toApplicationError,
   ) {
     input(::RegisterUserWorkflowCommand)
@@ -492,11 +497,12 @@ fun interface AdaptedUseCase<I, E, O> {
 
 An adapted use case gives application code a callable use case with public input, boundary errors, and public output.
 
-Use `adaptedUseCase(errors = ...) { ... }` with `state<StateType>()` when the public result should be derived from the final workflow state and errors should be mapped to an application type:
+Use `adaptedUseCase(name = "...", errors = ...) { ... }` with `state<StateType>()` when the public result should be derived from the final workflow state and errors should be mapped to an application type:
 
 ```kotlin
 val registerUser: AdaptedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
   adaptedUseCase(
+    name = "RegisterUser",
     errors = WorkflowError::toApplicationError,
   ) {
     input(::RegisterUserInternalCommand)
@@ -514,6 +520,7 @@ Use `event<EventType>()` when the natural boundary result is an emitted event:
 ```kotlin
 val registerUserEvent: AdaptedUseCase<RegisterUserCommand, ApplicationError, UserRegisteredEvent> =
   adaptedUseCase(
+    name = "RegisterUser",
     errors = WorkflowError::toApplicationError,
   ) {
     input(::RegisterUserInternalCommand)
@@ -530,7 +537,7 @@ If raw workflow errors are acceptable, omit `errors = ...`:
 
 ```kotlin
 val registerUser: AdaptedUseCase<RegisterUserCommand, WorkflowError, UserDto> =
-  adaptedUseCase {
+  adaptedUseCase(name = "RegisterUser") {
     input(::RegisterUserInternalCommand)
     workflow {
       startWith { command -> command.toValidatedState() }
@@ -629,7 +636,8 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 - **Purpose**: Entry point for creating a use case using the builder pattern
 - **Usage**: Wraps all other DSL methods in a configuration block
 - **How it works**: Initializes a use case builder and returns a fully configured `UseCase<C>` instance
-- **Example**: `val myUseCase = useCase<MyCommand> { ... }`
+- **Example**: `val myUseCase = useCase<MyCommand>(name = "MyUseCase") { ... }`
+- **Logging**: The optional `name` is the safe operational name emitted in debug-level invocation logs.
 
 ##### `startWith { ... }`
 
@@ -702,7 +710,7 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 
 Simple launch/await example:
 ```kotlin
-useCase<MyCommand> {
+useCase<MyCommand>(name = "MyUseCase") {
   startWith { cmd -> MyState(cmd.id).right() }
   thenLaunch(LogTelemetryWorkflow("telemetry"))
   thenLaunch(AuditWorkflow("audit"))

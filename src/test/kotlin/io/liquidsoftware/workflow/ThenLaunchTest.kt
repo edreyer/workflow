@@ -2,6 +2,9 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import arrow.core.raise.either
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -24,14 +27,14 @@ class ThenLaunchTest {
 
   class SideEffectWorkflow(
     override val id: String,
-    private val label: String,
+    private val label: String? = null,
     private val delayMs: Long = 0
   ) : Workflow<SeedState, SeedState>() {
     override suspend fun executeWorkflow(input: SeedState): Either<WorkflowError, WorkflowResult<SeedState>> = either {
       if (delayMs > 0) delay(delayMs)
       WorkflowResult(
         state = input,
-        events = listOf(SideEffectEvent(UUID.randomUUID(), Instant.EPOCH, label))
+        events = listOf(SideEffectEvent(UUID.randomUUID(), Instant.EPOCH, label ?: input.value))
       )
     }
   }
@@ -210,5 +213,31 @@ class ThenLaunchTest {
     assertTrue(result is Either.Right)
     val labels = result.value.events.filterIsInstance<SideEffectEvent>().map { it.label }
     assertTrue(labels.contains("e1"))
+  }
+
+  @Test
+  fun `concurrent invocations isolate launched workflows per use case execution`() = runBlocking {
+    val useCase = useCase<SeedCommand> {
+      startWith { command -> Either.Right(SeedState(command.value)) }
+      thenLaunch(SideEffectWorkflow("side-effect", delayMs = 25))
+      awaitLaunched()
+    }
+
+    val results = coroutineScope {
+      (1..25)
+        .map { index ->
+          async {
+            val value = "command-$index"
+            value to useCase.execute(SeedCommand(value))
+          }
+        }
+        .awaitAll()
+    }
+
+    results.forEach { (value, result) ->
+      assertTrue(result is Either.Right)
+      val labels = result.value.events.filterIsInstance<SideEffectEvent>().map { it.label }
+      assertEquals(listOf(value), labels)
+    }
   }
 }

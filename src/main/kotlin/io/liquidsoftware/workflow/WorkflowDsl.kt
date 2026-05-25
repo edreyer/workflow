@@ -19,13 +19,17 @@ import kotlin.reflect.full.cast
 
 /**
  * Entry point for building a UseCase with a fluent DSL.
+ *
+ * @param name Optional safe operational name used in debug-level invocation logs.
+ * Do not include user data or request data in this value.
  */
 fun <C : UseCaseCommand> useCase(
+  name: String? = null,
   block: WorkflowChainBuilderFactory<C>.() -> Unit
 ): UseCase<C> {
   val factory = WorkflowChainBuilderFactory<C>()
   factory.block()
-  return factory.build()
+  return factory.build(name)
 }
 
 class WorkflowChainBuilderFactory<C : UseCaseCommand> {
@@ -33,7 +37,6 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
   private var startCalled = false
   private var otherMethodCalled = false
   private val steps = mutableListOf<WorkflowStep>()
-  private val launchedJobs = mutableListOf<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>()
 
   /**
    * Initializes the pipeline state from the command/query.
@@ -330,7 +333,7 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
     timeout: Duration? = null
   ) {
     otherMethodCalled = true
-    steps.add(LaunchStep(workflow, timeout, launchedJobs))
+    steps.add(LaunchStep(workflow, timeout))
   }
 
   /**
@@ -338,47 +341,53 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
    */
   fun awaitLaunched() {
     otherMethodCalled = true
-    steps.add(AwaitLaunchedStep(launchedJobs))
+    steps.add(AwaitLaunchedStep)
   }
 
-  fun build(): UseCase<C> {
+  fun build(name: String? = null): UseCase<C> {
     if (!startCalled) {
       throw IllegalStateException("startWith() must be called to set the initial state")
     }
     val startFactory = startWithFactory ?: throw IllegalStateException("startWith() not configured")
     val pipelineSteps = steps.toList()
 
-    return object : UseCase<C>() {
-      override suspend fun executeDetailed(
+    return object : UseCase<C>(name) {
+      override suspend fun executeUseCase(
         command: C,
         context: WorkflowContext
       ): Either<WorkflowError, UseCaseResult<WorkflowState>> = either {
         val initialState = startFactory(command).bind()
         val initialResult = WorkflowResult(initialState, context = context)
+        val executionScope = WorkflowExecutionScope()
         @Suppress("UNCHECKED_CAST")
         val start: Either<WorkflowError, WorkflowResult<WorkflowState>> =
           Either.Right(initialResult) as Either<WorkflowError, WorkflowResult<WorkflowState>>
         val finalResult = pipelineSteps.fold(start) { acc, step ->
-          acc.flatMap { current -> step.execute(current) }
+          acc.flatMap { current -> step.execute(current, executionScope) }
         }.bind()
         finalResult.toUseCaseResult()
       }
-
-      override suspend fun execute(command: C): Either<WorkflowError, UseCaseEvents> =
-        executeDetailed(command).map { it.toUseCaseEvents() }
     }
   }
 }
 
 internal interface WorkflowStep {
-  suspend fun execute(result: WorkflowResult<WorkflowState>): Either<WorkflowError, WorkflowResult<WorkflowState>>
+  suspend fun execute(
+    result: WorkflowResult<WorkflowState>,
+    executionScope: WorkflowExecutionScope,
+  ): Either<WorkflowError, WorkflowResult<WorkflowState>>
+}
+
+internal class WorkflowExecutionScope {
+  val launchedJobs = mutableListOf<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>()
 }
 
 private class SequentialStep<I : WorkflowState, O : WorkflowState>(
   private val workflow: Workflow<I, O>
 ) : WorkflowStep {
   override suspend fun execute(
-    result: WorkflowResult<WorkflowState>
+    result: WorkflowResult<WorkflowState>,
+    executionScope: WorkflowExecutionScope,
   ): Either<WorkflowError, WorkflowResult<WorkflowState>> {
     return castState(result.state, workflow)
       .flatMap { input ->
@@ -392,7 +401,8 @@ private class ConditionalStep<I : WorkflowState, O : WorkflowState>(
   private val predicate: (WorkflowResult<WorkflowState>) -> Boolean
 ) : WorkflowStep {
   override suspend fun execute(
-    result: WorkflowResult<WorkflowState>
+    result: WorkflowResult<WorkflowState>,
+    executionScope: WorkflowExecutionScope,
   ): Either<WorkflowError, WorkflowResult<WorkflowState>> {
     return if (!predicate(result)) {
       Either.Right(result)
@@ -419,7 +429,8 @@ private class ParallelSideEffectStep<I : WorkflowState>(
   private val workflows: List<SideEffectWorkflow<I>>
 ) : WorkflowStep {
   override suspend fun execute(
-    result: WorkflowResult<WorkflowState>
+    result: WorkflowResult<WorkflowState>,
+    executionScope: WorkflowExecutionScope,
   ): Either<WorkflowError, WorkflowResult<WorkflowState>> = coroutineScope {
     if (workflows.isEmpty()) {
       return@coroutineScope Either.Right(result)
@@ -454,10 +465,10 @@ private class ParallelSideEffectStep<I : WorkflowState>(
 private class LaunchStep<I : WorkflowState>(
   private val workflow: SideEffectWorkflow<I>,
   private val timeout: Duration?,
-  private val launched: MutableList<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>
 ) : WorkflowStep {
   override suspend fun execute(
-    result: WorkflowResult<WorkflowState>
+    result: WorkflowResult<WorkflowState>,
+    executionScope: WorkflowExecutionScope,
   ): Either<WorkflowError, WorkflowResult<WorkflowState>> = coroutineScope {
     val input = castState(result.state, workflow).fold(
       { error -> return@coroutineScope Either.Left(error) },
@@ -477,17 +488,17 @@ private class LaunchStep<I : WorkflowState>(
         Either.Left(WorkflowError.ExceptionError("thenLaunch failed: ${workflow.id}", t))
       }
     }
-    launched.add(deferred)
+    executionScope.launchedJobs.add(deferred)
     Either.Right(result)
   }
 }
 
-private class AwaitLaunchedStep(
-  private val launched: MutableList<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>
-) : WorkflowStep {
+private data object AwaitLaunchedStep : WorkflowStep {
   override suspend fun execute(
-    result: WorkflowResult<WorkflowState>
+    result: WorkflowResult<WorkflowState>,
+    executionScope: WorkflowExecutionScope,
   ): Either<WorkflowError, WorkflowResult<WorkflowState>> {
+    val launched = executionScope.launchedJobs
     if (launched.isEmpty()) {
       return Either.Right(result)
     }
