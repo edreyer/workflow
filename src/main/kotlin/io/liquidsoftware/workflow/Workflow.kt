@@ -87,6 +87,12 @@ abstract class UseCase<C : UseCaseCommand>(
     context: WorkflowContext
   ): Either<WorkflowError, UseCaseResult<WorkflowState>>
 
+  internal suspend fun executeWithoutLogging(
+    command: C,
+    context: WorkflowContext
+  ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
+    executeUseCase(command, context)
+
   /**
    * Executes the use case and returns a detailed [UseCaseResult] containing the final state,
    * all emitted events, and the full execution context.

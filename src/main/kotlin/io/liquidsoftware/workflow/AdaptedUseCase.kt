@@ -83,18 +83,26 @@ class AdaptedUseCaseBuilder<I, C : UseCaseCommand, O> {
     val resultProjection = requireNotNull(resultProjection) { "adaptedUseCase result projection is required" }
     val rawUseCase = useCase(name, workflowFactory)
     val useCaseName = rawUseCase.name
+    val adaptedExecution = object : UseCase<AdaptedUseCaseInput<I>>(name) {
+      override suspend fun executeUseCase(
+        command: AdaptedUseCaseInput<I>,
+        context: WorkflowContext
+      ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
+        mapInput(inputMapper, command.input)
+          .flatMap { mappedCommand -> rawUseCase.executeWithoutLogging(mappedCommand, context) }
+    }
 
     return AdaptedUseCase { input, context ->
-      mapInput(inputMapper, input)
-        .flatMap { command ->
-          rawUseCase.executeProjected(command, context) { result ->
-            resultProjection.project(result, useCaseName)
-          }
+      adaptedExecution
+        .executeProjected(AdaptedUseCaseInput(input), context) { result ->
+          resultProjection.project(result, useCaseName)
         }
         .mapLeft(errorMapper)
     }
   }
 }
+
+private data class AdaptedUseCaseInput<I>(val input: I) : UseCaseCommand
 
 /**
  * Builds an application-facing use case that preserves raw [WorkflowError] values.

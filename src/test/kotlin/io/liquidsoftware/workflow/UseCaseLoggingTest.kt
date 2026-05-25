@@ -140,6 +140,33 @@ class UseCaseLoggingTest {
     }
   }
 
+  @Test
+  fun `adapted use case logs input mapper failures without public input data`() {
+    withUseCaseLogs { events ->
+      val useCase: AdaptedUseCase<String, WorkflowError, String> =
+        adaptedUseCase(name = "RegisterPatientAdapter") {
+          input { publicInput -> throw IllegalArgumentException("bad input: $publicInput") }
+          workflow {
+            startWith { command: LoggingCommand -> Either.Right(LoggingState(command.patientName)) }
+          }
+          result(state<LoggingState>()) { state -> state.patientName }
+        }
+
+      val result = runBlocking { useCase("Erin Sensitive") }
+
+      assertTrue(result.isLeft())
+      val messages = events.map { it.formattedMessage }
+      assertEquals(2, messages.size)
+      assertTrue(messages[0].contains("UseCase invocation started"))
+      assertTrue(messages[0].contains("name=RegisterPatientAdapter"))
+      assertTrue(messages[1].contains("UseCase invocation finished"))
+      assertTrue(messages[1].contains("name=RegisterPatientAdapter"))
+      assertTrue(messages[1].contains("outcome=failure"))
+      assertFalse(messages.any { it.contains("Erin Sensitive") })
+      assertFalse(messages.any { it.contains("bad input") })
+    }
+  }
+
   private fun withUseCaseLogs(assertions: (List<ILoggingEvent>) -> Unit) {
     val logger = LoggerFactory.getLogger("io.liquidsoftware.workflow.UseCase") as Logger
     val previousLevel = logger.level
