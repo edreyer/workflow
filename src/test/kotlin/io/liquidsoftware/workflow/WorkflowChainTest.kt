@@ -208,6 +208,25 @@ class WorkflowChainTest {
   }
 
   @Test
+  fun `executeProjected should map thrown projector failures`() {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
+      startWith { command -> Either.Right(TestState(command.id)) }
+      then(StepWorkflow("A", "step-a"))
+    }
+
+    val result = runBlocking {
+      useCase.executeProjected<String>(TestCommand(UUID.randomUUID())) {
+        error("bad projector")
+      }
+    }
+
+    assertTrue(result.isLeft())
+    val error = (result as Either.Left).value
+    assertTrue(error is WorkflowError.ExceptionError)
+    assertEquals("bad projector", (error as WorkflowError.ExceptionError).ex.message)
+  }
+
+  @Test
   fun `executeForEvent should return composition error when event missing`() {
     val useCase = object : WorkflowUseCase<TestCommand>() {
       override suspend fun executeUseCase(

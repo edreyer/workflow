@@ -34,6 +34,12 @@ class UseCaseTelemetryTest {
     }
   }
 
+  class SensitiveFailingWorkflow(override val id: String) : Workflow<SeedState, SeedState>() {
+    override suspend fun executeWorkflow(input: SeedState): Either<WorkflowError, WorkflowResult<SeedState>> = either {
+      raise(WorkflowError.ExecutionError("patient Alice Sensitive failed validation"))
+    }
+  }
+
   @Test
   fun `builds summary for success`() {
     val useCase = workflowUseCase<SeedCommand> {
@@ -196,7 +202,37 @@ class UseCaseTelemetryTest {
   }
 
   @Test
-  fun `summary surfaces domain error metadata`() {
+  fun `summary redacts error messages by default`() {
+    val useCase = workflowUseCase<SeedCommand> {
+      startWith { cmd -> Either.Right(SeedState(cmd.value)) }
+      then(SensitiveFailingWorkflow("sensitive-fail"))
+    }
+
+    val result = runBlocking { useCase.executeDetailed(SeedCommand("x")) }
+    val summary = result.toSummary(useCaseName = "Seed")
+
+    assertTrue(!summary.succeeded)
+    assertEquals("ExecutionError", summary.rootError?.type)
+    assertNull(summary.rootError?.message)
+  }
+
+  @Test
+  fun `summary can include error messages when explicitly requested`() {
+    val useCase = workflowUseCase<SeedCommand> {
+      startWith { cmd -> Either.Right(SeedState(cmd.value)) }
+      then(SensitiveFailingWorkflow("sensitive-fail"))
+    }
+
+    val result = runBlocking { useCase.executeDetailed(SeedCommand("x")) }
+    val summary = result.toSummary(useCaseName = "Seed", includeErrorMessages = true)
+
+    assertTrue(!summary.succeeded)
+    assertEquals("ExecutionError", summary.rootError?.type)
+    assertEquals("patient Alice Sensitive failed validation", summary.rootError?.message)
+  }
+
+  @Test
+  fun `summary surfaces domain error code without message by default`() {
     val useCase = workflowUseCase<SeedCommand> {
       startWith { cmd -> Either.Right(SeedState(cmd.value)) }
       then(DomainFailingWorkflow("domain-fail"))
@@ -207,7 +243,8 @@ class UseCaseTelemetryTest {
 
     assertTrue(!summary.succeeded)
     assertEquals("DomainError", summary.rootError?.type)
-    assertTrue(summary.rootError?.message?.contains("USER_EXISTS") == true)
+    assertEquals("USER_EXISTS", summary.rootError?.code)
+    assertNull(summary.rootError?.message)
   }
 
   @Test
@@ -222,7 +259,8 @@ class UseCaseTelemetryTest {
 
     assertTrue(!summary.succeeded)
     assertEquals("DomainError", rootError.type)
-    assertTrue(rootError.message?.contains("USER_EXISTS") == true)
+    assertEquals("USER_EXISTS", rootError.code)
+    assertNull(rootError.message)
     assertNull(rootError.workflowId)
   }
 }

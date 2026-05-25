@@ -173,6 +173,26 @@ class UseCaseDslTest {
   }
 
   @Test
+  fun `useCase maps custom result projection exceptions into WorkflowError`() = runBlocking {
+    val useCase: UseCase<PublicInput, WorkflowError, PublicOutput> =
+      useCase {
+        startWith { input: PublicInput -> Either.Right(TestState(input.id)) }
+        result(
+          UseCaseResultProjection { _, _ ->
+            error("bad custom projection")
+          }
+        )
+      }
+
+    val result = useCase(PublicInput(UUID.randomUUID()))
+
+    assertTrue(result.isLeft())
+    val error = (result as Either.Left).value
+    assertTrue(error is WorkflowError.ExceptionError)
+    assertEquals("bad custom projection", (error as WorkflowError.ExceptionError).ex.message)
+  }
+
+  @Test
   fun `useCase maps startWith exceptions into WorkflowError`() = runBlocking {
     val useCase: UseCase<PublicInput, WorkflowError, PublicOutput> =
       useCase {
@@ -230,6 +250,19 @@ class UseCaseDslTest {
     }
 
     assertEquals("useCase result projection is required", exception.message)
+  }
+
+  @Test
+  fun `useCase rejects multiple result projections`() {
+    val exception = assertThrows<IllegalStateException> {
+      useCase<PublicInput, PublicOutput> {
+        startWith { input -> Either.Right(TestState(input.id)) }
+        result(state<TestState>()) { state -> PublicOutput(state.steps.joinToString(",")) }
+        result(state<TestState>()) { state -> PublicOutput(state.steps.joinToString("|")) }
+      }
+    }
+
+    assertEquals("result() can only be called once", exception.message)
   }
 
   @Test

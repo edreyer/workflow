@@ -7,7 +7,9 @@
 - Removed the separate `adaptedUseCase { ... }` layer and the `input { ... }` command-to-command mapping step.
 - Added `state<StateType>()` and `event<EventType>()` result sources for explicit state and event projection inside use case definitions.
 - Renamed the lower-level workflow-native execution model to `WorkflowUseCase` and exposed it through `workflowUseCase { ... }`.
+- Moved workflow-native execution methods such as `executeDetailed(...)`, `executeProjected(...)`, `executeForEvent(...)`, and `executeForState(...)` onto `WorkflowUseCase`; application-facing `UseCase<I, E, O>` values are invoked directly.
 - Fixed `thenLaunch` so launched side-effect workflows run concurrently with subsequent steps until `awaitLaunched()` drains them.
+- Changed `toSummary` to redact root error messages by default, while preserving safe domain error codes and allowing explicit opt-in with `includeErrorMessages = true`.
 - Added a migration guide for upgrading v0.6.0 typed-boundary use cases to the new primary use case DSL.
 
 ## 0.6.0 - 2026-03-14

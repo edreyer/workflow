@@ -73,24 +73,40 @@ data class UseCaseResult<out S : WorkflowState>(
     events.lastEvent()
 
   inline fun <reified T : Event> requireLastEvent(useCaseName: String = "UseCase"): Either<WorkflowError, T> =
-    lastEvent<T>()?.let { Either.Right(it) }
-      ?: Either.Left(
+    requireLastEvent(T::class, useCaseName)
+
+  fun <T : Event> requireLastEvent(type: KClass<T>, useCaseName: String = "UseCase"): Either<WorkflowError, T> {
+    val lastEvent = events.lastOrNull { event -> type.isInstance(event) }
+    return if (lastEvent != null) {
+      @Suppress("UNCHECKED_CAST")
+      Either.Right(lastEvent as T)
+    } else {
+      Either.Left(
         WorkflowError.CompositionError(
-          "Use case $useCaseName did not emit expected event ${T::class.simpleName}",
-          IllegalStateException("Missing expected event ${T::class.simpleName}")
+          "Use case $useCaseName did not emit expected event ${type.simpleName}",
+          IllegalStateException("Missing expected event ${type.simpleName}")
         )
       )
+    }
+  }
 
   inline fun <reified T : WorkflowState> requireState(useCaseName: String = "UseCase"): Either<WorkflowError, T> =
-    when (val currentState = state) {
-      is T -> Either.Right(currentState)
-      else -> Either.Left(
+    requireState(T::class, useCaseName)
+
+  fun <T : WorkflowState> requireState(type: KClass<T>, useCaseName: String = "UseCase"): Either<WorkflowError, T> {
+    val currentState = state
+    return if (type.isInstance(currentState)) {
+      @Suppress("UNCHECKED_CAST")
+      Either.Right(currentState as T)
+    } else {
+      Either.Left(
         WorkflowError.CompositionError(
-          "Use case $useCaseName ended with state ${currentState::class.simpleName} instead of expected state ${T::class.simpleName}",
+          "Use case $useCaseName ended with state ${currentState::class.simpleName} instead of expected state ${type.simpleName}",
           IllegalStateException("Unexpected final state ${currentState::class.simpleName}")
         )
       )
     }
+  }
 
   fun toUseCaseEvents(): UseCaseEvents = UseCaseEvents(events)
 }

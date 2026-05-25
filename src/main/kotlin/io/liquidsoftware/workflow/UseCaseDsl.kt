@@ -26,14 +26,14 @@ fun interface UseCase<I, E, O> {
 /**
  * DSL builder for [useCase].
  */
-class UseCaseBuilder<I : UseCaseCommand, O> : WorkflowChainBuilderFactory<I>() {
+class UseCaseBuilder<I : UseCaseCommand, O> internal constructor() : WorkflowChainBuilderFactory<I>() {
   private var resultProjection: UseCaseResultProjection<O>? = null
 
   /**
    * Defines a custom projection from the complete workflow result to public output.
    */
   fun result(projection: UseCaseResultProjection<O>) {
-    resultProjection = projection
+    setResultProjection(projection)
   }
 
   /**
@@ -43,7 +43,7 @@ class UseCaseBuilder<I : UseCaseCommand, O> : WorkflowChainBuilderFactory<I>() {
     source: StateResultSource<S>,
     mapper: (S) -> O,
   ) {
-    resultProjection = source.toProjection(mapper)
+    setResultProjection(source.toProjection(mapper))
   }
 
   /**
@@ -53,7 +53,12 @@ class UseCaseBuilder<I : UseCaseCommand, O> : WorkflowChainBuilderFactory<I>() {
     source: EventResultSource<Ev>,
     mapper: (Ev) -> O,
   ) {
-    resultProjection = source.toProjection(mapper)
+    setResultProjection(source.toProjection(mapper))
+  }
+
+  private fun setResultProjection(projection: UseCaseResultProjection<O>) {
+    check(resultProjection == null) { "result() can only be called once" }
+    resultProjection = projection
   }
 
   internal fun <E> buildUseCase(
@@ -152,42 +157,6 @@ private fun <Ev : Event, O> EventResultSource<Ev>.toProjection(
       .requireLastEvent(type, useCaseName)
       .flatMap { event -> mapProjectionOutput { mapper(event) } }
   }
-
-private fun <S : WorkflowState> UseCaseResult<WorkflowState>.requireState(
-  type: KClass<S>,
-  useCaseName: String,
-): Either<WorkflowError, S> {
-  val currentState = state
-  return if (type.isInstance(currentState)) {
-    @Suppress("UNCHECKED_CAST")
-    Either.Right(currentState as S)
-  } else {
-    Either.Left(
-      WorkflowError.CompositionError(
-        "Use case $useCaseName ended with state ${currentState::class.simpleName} instead of expected state ${type.simpleName}",
-        IllegalStateException("Unexpected final state ${currentState::class.simpleName}")
-      )
-    )
-  }
-}
-
-private fun <Ev : Event> UseCaseResult<WorkflowState>.requireLastEvent(
-  type: KClass<Ev>,
-  useCaseName: String,
-): Either<WorkflowError, Ev> {
-  val lastEvent = events.lastOrNull { event -> type.isInstance(event) }
-  return if (lastEvent != null) {
-    @Suppress("UNCHECKED_CAST")
-    Either.Right(lastEvent as Ev)
-  } else {
-    Either.Left(
-      WorkflowError.CompositionError(
-        "Use case $useCaseName did not emit expected event ${type.simpleName}",
-        IllegalStateException("Missing expected event ${type.simpleName}")
-      )
-    )
-  }
-}
 
 @PublishedApi
 internal fun <O> mapProjectionOutput(

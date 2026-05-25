@@ -37,7 +37,7 @@ fun <C : UseCaseCommand> workflowUseCase(
   return factory.build(name)
 }
 
-open class WorkflowChainBuilderFactory<C : UseCaseCommand> {
+open class WorkflowChainBuilderFactory<C : UseCaseCommand> internal constructor() {
   private var startWithFactory: ((C) -> Either<WorkflowError, WorkflowState>)? = null
   private var startCalled = false
   private var otherMethodCalled = false

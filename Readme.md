@@ -151,8 +151,8 @@ accomplish this.
 - **Metadata Collection**: Automatically track execution timing, workflow IDs, and success status
 - **Context Sharing**: Share non-domain data between workflows through the WorkflowContext
 - **Execution History**: Maintain a complete audit trail of all executed workflows within a use case (including failure metadata via ExecutionContextError)
-- **Observability Helpers**: Build use case summaries for logging/metrics via `toSummary` if desired
-- **Safe Invocation Logging**: Use cases emit debug-level SLF4J logs with the use-case name, outcome, duration, event count, and workflow count. Command input, state, event payloads, projected output, and error messages are not logged.
+- **Observability Helpers**: Build safe-by-default use case summaries for logging/metrics via `toSummary` if desired
+- **Safe Invocation Logging**: Use cases emit debug-level SLF4J logs with the use-case name, outcome, duration, event count, and workflow count. Command input, state, event payloads, projected output, and error messages are not logged. `toSummary` also redacts root error messages by default; only set `includeErrorMessages = true` when those values are known to be safe.
 
 ### Robust Error Handling
 - **Exception-Free Execution**: Workflow execution returns typed Either values; DSL misuse throws configuration errors
@@ -402,8 +402,8 @@ Events represent the outcomes of workflow execution:
     - Contain a unique ID and timestamp
     - Include relevant domain data related to what happened
 - **Usage**:
-    - Serve as the output of workflows
-    - Provide data for subsequent workflows in a chain
+    - Record outcomes emitted by workflows
+    - Inform predicates, projections, adapters, and audit flows while typed state moves between workflow steps
     - Can be collected by the UseCase for auditing or further processing
 
 #### Flow of Data
@@ -771,10 +771,10 @@ The snippets below assume a suspend context (e.g., inside a suspend function or 
 ##### ValidationError Example
 
 ```kotlin
-class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCommand, OrderValidatedEvent>() {
+class ValidateOrderWorkflow(override val id: String) : Workflow<OrderValidationState, OrderValidationState>() {
   override suspend fun executeWorkflow(
-    input: ValidateOrderCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: OrderValidationState
+  ): Either<WorkflowError, WorkflowResult<OrderValidationState>> = either {
     // Validate order inputs
     ensure(input.items.isNotEmpty()) { 
       WorkflowError.ValidationError("Order must contain at least one item") 
@@ -786,12 +786,12 @@ class ValidateOrderWorkflow(override val id: String) : Workflow<ValidateOrderCom
 
     // Create event and return result if validation passes
     val event = OrderValidatedEvent(/* ... */)
-    WorkflowResult(listOf(event))
+    WorkflowResult(state = input, events = listOf(event))
   }
 }
 
 // In API layer/controller
-when (val result = orderUseCase.execute(command)) {
+when (val result = orderUseCase(command)) {
   is Either.Left -> when (val error = result.value) {
     is WorkflowError.ValidationError -> {
       logger.info("Order validation failed: ${error.message}")
@@ -806,10 +806,10 @@ when (val result = orderUseCase.execute(command)) {
 ##### ExecutionError Example
 
 ```kotlin
-class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentCommand, PaymentProcessedEvent>() {
+class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentState, ProcessPaymentState>() {
   override suspend fun executeWorkflow(
-    input: ProcessPaymentCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: ProcessPaymentState
+  ): Either<WorkflowError, WorkflowResult<ProcessPaymentState>> = either {
     val customer = customerRepository.findById(input.customerId)
 
     // Check business rules
@@ -822,7 +822,7 @@ class ProcessPaymentWorkflow(override val id: String) : Workflow<ProcessPaymentC
     // Process payment if business rules pass
     val payment = paymentGateway.processPayment(input.orderId, input.amount)
     val event = PaymentProcessedEvent(/* ... */)
-    WorkflowResult(listOf(event))
+    WorkflowResult(state = input.copy(payment = payment), events = listOf(event))
   }
 }
 
@@ -910,16 +910,16 @@ Value: your workflow exposes a domain-shaped failure, and the boundary can trans
 ##### ExceptionError Example
 
 ```kotlin
-class CheckInventoryWorkflow(override val id: String) : Workflow<CheckInventoryCommand, InventoryVerifiedEvent>() {
+class CheckInventoryWorkflow(override val id: String) : Workflow<InventoryCheckState, InventoryCheckState>() {
   override suspend fun executeWorkflow(
-    input: CheckInventoryCommand
-  ): Either<WorkflowError, WorkflowResult> = either {
+    input: InventoryCheckState
+  ): Either<WorkflowError, WorkflowResult<InventoryCheckState>> = either {
     try {
       // External service call that might fail
       val inventoryStatus = inventoryService.checkAvailability(input.items)
 
       val event = InventoryVerifiedEvent(/* ... */)
-      WorkflowResult(listOf(event))
+      WorkflowResult(state = input.copy(inventoryStatus = inventoryStatus), events = listOf(event))
     } catch (e: InventoryServiceException) {
       raise(WorkflowError.ExceptionError(
         "Failed to check inventory availability", e
@@ -1134,7 +1134,7 @@ Implement resilient processes with sophisticated error handling:
   when (result) {
     is Either.Left -> {
       if (context.getTypedData<Boolean>("paymentProcessed") == true) {
-        refundUseCase.execute(CreateRefundCommand(orderId, amount))
+        refundUseCase(CreateRefundCommand(orderId, amount))
       }
     }
   }

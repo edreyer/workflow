@@ -147,7 +147,10 @@ abstract class WorkflowUseCase<C : UseCaseCommand>(
     val startTime = Instant.now()
     logUseCaseStarted(name)
     val detailed = executeUseCase(command, context)
-    val result = detailed.flatMap(projector)
+    val result =
+      Either.catch { detailed.flatMap(projector) }
+        .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
+        .flatMap { it }
     val duration = Duration.between(startTime, Instant.now())
     logUseCaseFinished(name, result.isRight(), duration, detailed.logMetadata())
     return result
