@@ -24,7 +24,7 @@ class WorkflowDslTest {
             }
         }
 
-        val useCase = useCase<TestCommand> {
+        val useCase = workflowUseCase<TestCommand> {
             startWith { command -> Either.Right(StartState(command.id)) }
             then(workflow)
         }

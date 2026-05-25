@@ -146,7 +146,7 @@ class ParallelJoinTest {
     val alphaEvent = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
     val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
 
-    val joinUseCase = useCase<JoinCommand> {
+    val joinUseCase = workflowUseCase<JoinCommand> {
       startWith { command -> Either.Right(JoinState(command.value)) }
       parallelJoin(
         EmittingWorkflow(
@@ -173,7 +173,7 @@ class ParallelJoinTest {
     val alphaEvent = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
     val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
 
-    val useCase = useCase<JoinCommand> {
+    val useCase = workflowUseCase<JoinCommand> {
       startWith { command -> Either.Right(JoinState(command.value)) }
       parallelJoin(
         EmittingWorkflow(

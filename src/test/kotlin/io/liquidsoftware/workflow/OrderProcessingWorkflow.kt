@@ -26,7 +26,7 @@ fun main() {
   // Assemble UseCase
   // -------------------------
 
-  val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase {
+  val orderProcessingUseCase: WorkflowUseCase<ProcessOrderCommand> = workflowUseCase {
     startWith { command ->
       Either.Right(
         OrderDraftState(

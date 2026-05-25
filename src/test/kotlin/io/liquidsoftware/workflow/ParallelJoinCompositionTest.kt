@@ -29,7 +29,7 @@ class ParallelJoinCompositionTest {
     @Suppress("UNCHECKED_CAST")
     val wrongWorkflow = WrongInputWorkflow("wrong") as Workflow<First, Second>
 
-    val useCase = useCase<FirstCommand> {
+    val useCase = workflowUseCase<FirstCommand> {
       startWith { cmd -> Either.Right(First(cmd.value)) }
       parallelJoin<First, First, Second, Merged>(
         FirstWorkflow("first"),

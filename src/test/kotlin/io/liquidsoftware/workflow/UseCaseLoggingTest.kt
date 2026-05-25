@@ -53,7 +53,7 @@ class UseCaseLoggingTest {
   @Test
   fun `logs named use case start and successful outcome without command or event data`() {
     withUseCaseLogs { events ->
-      val useCase = useCase<LoggingCommand>(name = "RegisterPatient") {
+      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
         startWith { command -> Either.Right(LoggingState(command.patientName)) }
         then(LoggingWorkflow())
       }
@@ -77,7 +77,7 @@ class UseCaseLoggingTest {
   @Test
   fun `logs named use case failed outcome without command input or error message data`() {
     withUseCaseLogs { events ->
-      val useCase = useCase<LoggingCommand>(name = "RegisterPatient") {
+      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
         startWith { command -> Either.Right(LoggingState(command.patientName)) }
         then(FailingLoggingWorkflow())
       }
@@ -100,7 +100,7 @@ class UseCaseLoggingTest {
   @Test
   fun `logs projected invocation failure when projection cannot find expected event`() {
     withUseCaseLogs { events ->
-      val useCase = useCase<LoggingCommand>(name = "RegisterPatient") {
+      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
         startWith { command -> Either.Right(LoggingState(command.patientName)) }
       }
 
@@ -116,54 +116,46 @@ class UseCaseLoggingTest {
   }
 
   @Test
-  fun `adapted use case logs configured name without public input or output data`() {
+  fun `public use case logs configured name without input or output data`() {
     withUseCaseLogs { events ->
-      val useCase: AdaptedUseCase<String, WorkflowError, String> =
-        adaptedUseCase(name = "RegisterPatientAdapter") {
-          input { publicInput -> LoggingCommand(publicInput) }
-          workflow {
-            startWith { command -> Either.Right(LoggingState(command.patientName)) }
-            then(LoggingWorkflow())
-          }
+      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
+        useCase(name = "RegisterPatient") {
+          startWith { command -> Either.Right(LoggingState(command.patientName)) }
+          then(LoggingWorkflow())
           result(state<LoggingState>()) { state -> state.patientName }
         }
 
-      val result = runBlocking { useCase("Diana Sensitive") }
+      val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
 
       assertTrue(result.isRight())
       val messages = events.map { it.formattedMessage }
       assertEquals(2, messages.size)
-      assertTrue(messages[0].contains("name=RegisterPatientAdapter"))
-      assertTrue(messages[1].contains("name=RegisterPatientAdapter"))
+      assertTrue(messages[0].contains("name=RegisterPatient"))
+      assertTrue(messages[1].contains("name=RegisterPatient"))
       assertTrue(messages[1].contains("outcome=success"))
       assertFalse(messages.any { it.contains("Diana Sensitive") })
     }
   }
 
   @Test
-  fun `adapted use case logs input mapper failures without public input data`() {
+  fun `public use case logs failed outcome when startWith throws without input data`() {
     withUseCaseLogs { events ->
-      val useCase: AdaptedUseCase<String, WorkflowError, String> =
-        adaptedUseCase(name = "RegisterPatientAdapter") {
-          input { publicInput -> throw IllegalArgumentException("bad input: $publicInput") }
-          workflow {
-            startWith { command: LoggingCommand -> Either.Right(LoggingState(command.patientName)) }
-          }
+      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
+        useCase(name = "RegisterPatient") {
+          startWith<LoggingState> { command -> error("invalid patient ${command.patientName}") }
           result(state<LoggingState>()) { state -> state.patientName }
         }
 
-      val result = runBlocking { useCase("Erin Sensitive") }
+      val result = runBlocking { useCase(LoggingCommand("Eve Sensitive")) }
 
       assertTrue(result.isLeft())
       val messages = events.map { it.formattedMessage }
       assertEquals(2, messages.size)
-      assertTrue(messages[0].contains("UseCase invocation started"))
-      assertTrue(messages[0].contains("name=RegisterPatientAdapter"))
-      assertTrue(messages[1].contains("UseCase invocation finished"))
-      assertTrue(messages[1].contains("name=RegisterPatientAdapter"))
+      assertTrue(messages[0].contains("name=RegisterPatient"))
+      assertTrue(messages[1].contains("name=RegisterPatient"))
       assertTrue(messages[1].contains("outcome=failure"))
-      assertFalse(messages.any { it.contains("Erin Sensitive") })
-      assertFalse(messages.any { it.contains("bad input") })
+      assertFalse(messages.any { it.contains("Eve Sensitive") })
+      assertFalse(messages.any { it.contains("invalid patient") })
     }
   }
 

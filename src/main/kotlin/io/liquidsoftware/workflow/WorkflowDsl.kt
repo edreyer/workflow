@@ -18,21 +18,25 @@ import kotlin.reflect.KTypeParameter
 import kotlin.reflect.full.cast
 
 /**
- * Entry point for building a UseCase with a fluent DSL.
+ * Entry point for building a workflow-native use case.
+ *
+ * Most application code should prefer [useCase], which returns a callable
+ * application-facing [UseCase]. Use this lower-level DSL when callers need
+ * direct access to workflow-native state, event, and context execution methods.
  *
  * @param name Optional safe operational name used in debug-level invocation logs.
  * Do not include user data or request data in this value.
  */
-fun <C : UseCaseCommand> useCase(
+fun <C : UseCaseCommand> workflowUseCase(
   name: String? = null,
   block: WorkflowChainBuilderFactory<C>.() -> Unit
-): UseCase<C> {
+): WorkflowUseCase<C> {
   val factory = WorkflowChainBuilderFactory<C>()
   factory.block()
   return factory.build(name)
 }
 
-class WorkflowChainBuilderFactory<C : UseCaseCommand> {
+open class WorkflowChainBuilderFactory<C : UseCaseCommand> {
   private var startWithFactory: ((C) -> Either<WorkflowError, WorkflowState>)? = null
   private var startCalled = false
   private var otherMethodCalled = false
@@ -344,19 +348,23 @@ class WorkflowChainBuilderFactory<C : UseCaseCommand> {
     steps.add(AwaitLaunchedStep)
   }
 
-  fun build(name: String? = null): UseCase<C> {
+  internal fun build(name: String? = null): WorkflowUseCase<C> {
     if (!startCalled) {
       throw IllegalStateException("startWith() must be called to set the initial state")
     }
     val startFactory = startWithFactory ?: throw IllegalStateException("startWith() not configured")
     val pipelineSteps = steps.toList()
 
-    return object : UseCase<C>(name) {
+    return object : WorkflowUseCase<C>(name) {
       override suspend fun executeUseCase(
         command: C,
         context: WorkflowContext
       ): Either<WorkflowError, UseCaseResult<WorkflowState>> = either {
-        val initialState = startFactory(command).bind()
+        val initialState =
+          Either.catch { startFactory(command) }
+            .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
+            .bind()
+            .bind()
         val initialResult = WorkflowResult(initialState, context = context)
         val executionScope = WorkflowExecutionScope()
         @Suppress("UNCHECKED_CAST")

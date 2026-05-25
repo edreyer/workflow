@@ -36,7 +36,7 @@ class UseCaseTelemetryTest {
 
   @Test
   fun `builds summary for success`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { cmd -> Either.Right(SeedState(cmd.value)) }
       then(OkWorkflow("ok"))
     }
@@ -54,7 +54,7 @@ class UseCaseTelemetryTest {
 
   @Test
   fun `builds summary for detailed success and derives executions from context`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { cmd -> Either.Right(SeedState(cmd.value)) }
       then(OkWorkflow("ok"))
     }
@@ -98,7 +98,7 @@ class UseCaseTelemetryTest {
 
   @Test
   fun `builds summary for failure`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { cmd -> Either.Right(SeedState(cmd.value)) }
       then(FailingWorkflow("fail"))
     }
@@ -197,7 +197,7 @@ class UseCaseTelemetryTest {
 
   @Test
   fun `summary surfaces domain error metadata`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { cmd -> Either.Right(SeedState(cmd.value)) }
       then(DomainFailingWorkflow("domain-fail"))
     }

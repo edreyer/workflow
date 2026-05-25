@@ -60,16 +60,20 @@ abstract class Workflow<in I : WorkflowState, out O : WorkflowState> {
 }
 
 /**
- * Public execution model for an application use case.
+ * Lower-level workflow-native execution model.
  *
- * Use cases emit debug-level invocation logs through SLF4J. Logs include only
+ * Most application code should use callable [UseCase] values built with the
+ * top-level `useCase` DSL. This type exists to run composed workflow chains and
+ * preserve detailed state, event, and context data internally.
+ *
+ * Workflow use cases emit debug-level invocation logs through SLF4J. Logs include only
  * operational metadata such as the configured use-case name, success/failure
  * outcome, duration, event count, and workflow count. Command input, state,
  * event payloads, projected output, and error messages are intentionally not logged.
  *
  * @param configuredName Optional safe name used in invocation logs and projection errors.
  */
-abstract class UseCase<C : UseCaseCommand>(
+abstract class WorkflowUseCase<C : UseCaseCommand>(
   private val configuredName: String? = null
 ) {
   /**

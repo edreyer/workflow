@@ -23,9 +23,7 @@
       * [Key Characteristics](#key-characteristics)
       * [Flow Control Capabilities](#flow-control-capabilities)
       * [Organizational Benefits](#organizational-benefits)
-      * [Implementation Patterns](#implementation-patterns)
-      * [Focused Execution Methods](#focused-execution-methods)
-      * [Adapted Use Cases](#adapted-use-cases)
+      * [Implementation Pattern](#implementation-pattern)
     * [Inputs and Events](#inputs-and-events)
       * [Workflow Inputs](#workflow-inputs)
         * [Commands](#commands)
@@ -172,55 +170,66 @@ accomplish this.
 Here's how it looks to construct and execute a use case:
 
 ```kotlin
-val orderProcessingUseCase: UseCase<ProcessOrderCommand> = useCase(name = "ProcessOrder") {
-  startWith { command ->
-    OrderDraftState(
-      orderId = command.orderId,
-      customerId = command.customerId,
-      items = command.items,
-      totalAmount = command.totalAmount
-    ).right()
-  }
-
-  then(ValidateOrderWorkflow("validate-order"))
-
-  parallelJoin(
-    CalculateSubtotalWorkflow("calc-subtotal"),
-    CalculateTaxWorkflow("calc-tax"),
-  ) { subtotal, tax ->
-    PricingState(
-      orderId = subtotal.orderId,
-      customerId = subtotal.customerId,
-      items = subtotal.items,
-      totalAmount = subtotal.totalAmount,
-      shippingAddress = subtotal.shippingAddress,
-      subtotal = subtotal.subtotal,
-      tax = tax.tax,
-      total = subtotal.subtotal + tax.tax
-    )
-  }
-
-  parallel {
-    then(CheckInventoryWorkflow("check-inventory"))
-    then(ProcessPaymentWorkflow("process-payment"))
-  }
-
-  thenIf(
-    PrepareShipmentWorkflow("prepare-shipment")
+val orderProcessingUseCase: UseCase<ProcessOrderCommand, ApplicationError, OrderReceipt> =
+  useCase(
+    name = "ProcessOrder",
+    errors = WorkflowError::toApplicationError,
   ) {
-    result ->
+    startWith { command ->
+      OrderDraftState(
+        orderId = command.orderId,
+        customerId = command.customerId,
+        items = command.items,
+        totalAmount = command.totalAmount
+      ).right()
+    }
+
+    then(ValidateOrderWorkflow("validate-order"))
+
+    parallelJoin(
+      CalculateSubtotalWorkflow("calc-subtotal"),
+      CalculateTaxWorkflow("calc-tax"),
+    ) { subtotal, tax ->
+      PricingState(
+        orderId = subtotal.orderId,
+        customerId = subtotal.customerId,
+        items = subtotal.items,
+        totalAmount = subtotal.totalAmount,
+        shippingAddress = subtotal.shippingAddress,
+        subtotal = subtotal.subtotal,
+        tax = tax.tax,
+        total = subtotal.subtotal + tax.tax
+      )
+    }
+
+    parallel {
+      then(CheckInventoryWorkflow("check-inventory"))
+      then(ProcessPaymentWorkflow("process-payment"))
+    }
+
+    thenIf(
+      PrepareShipmentWorkflow("prepare-shipment")
+    ) { result ->
       val paymentSuccessful = when (val payment = result.getFromEvent(PaymentProcessedEvent::payment)) {
         is SuccessfulPayment -> true
         else -> false
       }
       result.context.getTypedData<Boolean>("inventoryAvailable") == true && paymentSuccessful
+    }
+
+    result(state<OrderReadyForShipmentState>()) { state ->
+      OrderReceipt(
+        orderId = state.orderId,
+        total = state.total,
+        status = "ready_for_shipment"
+      )
+    }
   }
-}
 
 runBlocking {
-  val result = orderProcessingUseCase.executeDetailed(initialCommand)
+  val result = orderProcessingUseCase(initialCommand)
   when (result) {
-    is Either.Right -> println("UseCase ended with state ${result.value.state} and emitted ${result.value.events.size} events")
+    is Either.Right -> println("Order receipt: ${result.value}")
     is Either.Left -> println("Use case failed: ${result.value}")
   }
 }
@@ -295,55 +304,19 @@ A UseCase is a composed set of Workflow instances that represents a complete bus
 - **Process Visibility**: Makes it easy to see not only what use cases your application supports, but also the exact steps each use case performs
 - **Evolutionary Design**: Easily add, remove, or reorder workflow steps as your business requirements evolve
 
-#### Implementation Patterns
+#### Implementation Pattern
 
-UseCases can be created in two ways:
-
-1. **Using the DSL**: The recommended approach that leverages the fluent builder pattern
-   ```kotlin
-   val registerUserUseCase = useCase<RegisterUserCommand>(name = "RegisterUser") {
-     startWith { command -> InitialState(command).right() }
-     then(validateUserWorkflow)
-     then(createUserWorkflow)
-     then(sendWelcomeEmailWorkflow)
-   }
-   ```
-
-   Invoke a raw workflow-shaped use case when the caller is comfortable with workflow-native errors, states, events, and commands:
-
-   ```kotlin
-   val finalState =
-     registerUserUseCase.executeForState<RegisteredUserState>(
-       RegisterUserCommand(...)
-     )
-   ```
-
-2. **Through Direct Implementation**: For situations requiring custom behavior beyond what the DSL provides
-   ```kotlin
-   class RegisterUserUseCase : UseCase<RegisterUserCommand>("RegisterUser") {
-     override suspend fun executeUseCase(
-       command: RegisterUserCommand,
-       context: WorkflowContext
-     ): Either<WorkflowError, UseCaseResult<WorkflowState>> {
-       // Custom implementation
-     }
-   }
-   ```
-
-For application or module boundaries, use `adaptedUseCase { ... }` so callers can work with public input, public errors, and public output:
+Use `useCase` as the primary DSL. It defines the public input, workflow chain, error mapping, and public output in one place:
 
 ```kotlin
-val registerUser =
-  adaptedUseCase<RegisterUserCommand, RegisterUserWorkflowCommand, ApplicationError, UserDto>(
+val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
+  useCase(
     name = "RegisterUser",
     errors = WorkflowError::toApplicationError,
   ) {
-    input(::RegisterUserWorkflowCommand)
-    workflow {
-      startWith { command -> command.toValidatedState() }
-      then(HashPasswordStep(passwordHasher))
-      then(PersistUserStep(userRepository, userIdGenerator))
-    }
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
     result(state<RegisteredUserState>()) { state -> state.user.toDto() }
   }
 
@@ -351,206 +324,34 @@ val result: Either<ApplicationError, UserDto> =
   registerUser(RegisterUserCommand(...))
 ```
 
-By making your use cases explicit and co-locating them, you gain a clear picture of your application's capabilities and can more easily maintain, test, and evolve your business processes.
-
-#### Focused Execution Methods
-
-`execute(command)` is still available and remains the compatibility-friendly, event-only API. For new integration code, prefer the more focused execution methods that return exactly the data shape the caller needs.
-
-Use the methods like this:
-
-- `executeDetailed(command)` when the caller needs the final state, all emitted events, and workflow context
-- `executeProjected(command)` when the caller needs a custom output built from state, events, and context
-- `executeForEvent<EventType>(command)` when the caller only cares about one emitted event
-- `executeForState<StateType>(command)` when the caller only cares about the final state
-
-All of these methods also accept an optional initial `WorkflowContext`, which is useful for injecting boundary metadata such as correlation IDs:
+If raw workflow errors are acceptable, omit `errors = ...`:
 
 ```kotlin
-val context = WorkflowContext()
-  .addData(WorkflowContext.CORRELATION_ID, request.correlationId)
-
-val result = registerUserUseCase.executeForEvent<UserRegisteredEvent>(
-  command = request.toCommand(),
-  context = context
-)
-```
-
-##### `executeDetailed(command)`
-
-Use `executeDetailed` when the boundary needs both business output and observability data. This is especially useful in adapters that log, audit, or derive telemetry from `WorkflowContext`.
-
-```kotlin
-suspend fun placeOrder(command: PlaceOrderCommand): Either<WorkflowError, OrderReceiptResponse> =
-  either {
-    val detailed = placeOrderUseCase.executeDetailed(command).bind()
-    val state = detailed.requireState<OrderPlacedState>("PlaceOrderUseCase").bind()
-
-    auditLogger.log(
-      orderId = state.orderId,
-      eventCount = detailed.events.size,
-      correlationId = detailed.context.get(WorkflowContext.CORRELATION_ID)
-    )
-
-    OrderReceiptResponse(
-      orderId = state.orderId,
-      total = state.total,
-      workflowCount = detailed.context.executions.size
-    )
-  }
-```
-
-Value: the caller gets the final typed state plus the emitted events and execution metadata in one call, with no manual plumbing.
-
-##### `executeProjected(command)`
-
-Use `executeProjected` when your boundary wants a purpose-built return type instead of exposing raw workflow primitives. This keeps controllers and ports thin without forcing them to inspect events or cast state themselves.
-
-```kotlin
-data class CheckoutResponse(
-  val orderId: UUID,
-  val paymentStatus: String,
-  val correlationId: String?
-)
-
-suspend fun checkout(command: CheckoutCommand): Either<WorkflowError, CheckoutResponse> =
-  checkoutUseCase.executeProjected(command) { result ->
-    either {
-      val state = result.requireState<CheckoutCompletedState>("CheckoutUseCase").bind()
-      val payment = result.requireLastEvent<PaymentCapturedEvent>("CheckoutUseCase").bind()
-
-      CheckoutResponse(
-        orderId = state.orderId,
-        paymentStatus = payment.status,
-        correlationId = result.context.get(WorkflowContext.CORRELATION_ID)
-      )
-    }
-  }
-```
-
-Value: the projection logic stays close to execution, and the caller receives an application-facing DTO instead of `UseCaseResult`.
-
-##### `executeForEvent<EventType>(command)`
-
-Use `executeForEvent` when the natural output of the use case is a single emitted event. This is often the cleanest fit for write APIs that want the created identifier, token, or notification payload.
-
-```kotlin
-suspend fun registerUser(request: RegisterUserRequest): Either<WorkflowError, RegisterUserResponse> =
-  registerUserUseCase
-    .executeForEvent<UserRegisteredEvent>(request.toCommand())
-    .map { event ->
-      RegisterUserResponse(
-        userId = event.userId,
-        email = event.email,
-        registeredAt = event.timestamp
-      )
-    }
-```
-
-Value: the controller does not need to inspect a list of events and guess which one is authoritative.
-
-##### `executeForState<StateType>(command)`
-
-Use `executeForState` when the final state is the real output, such as a fully enriched aggregate state or computed query model assembled by several workflows.
-
-```kotlin
-suspend fun calculateQuote(command: CalculateQuoteCommand): Either<WorkflowError, QuoteView> =
-  pricingUseCase
-    .executeForState<PricedQuoteState>(command)
-    .map { state ->
-      QuoteView(
-        quoteId = state.quoteId,
-        subtotal = state.subtotal,
-        tax = state.tax,
-        total = state.total,
-        lineItems = state.lineItems
-      )
-    }
-```
-
-Value: the caller receives the final domain state directly, without any event extraction ceremony.
-
-These focused methods are designed for application boundaries. They let each adapter ask the use case for the narrowest useful output while preserving typed workflow internals inside the library.
-
-#### Adapted Use Cases
-
-In many real applications, the workflow itself is not the awkward part. The awkward part is exposing that workflow at a module, web, CLI, or job boundary without writing the same adapter code over and over.
-
-That adapter usually has to do four things:
-
-- map public input into an internal `UseCaseCommand`
-- define the workflow steps
-- choose whether the public result comes from the final state or an emitted event
-- map `WorkflowError` into a boundary error type
-- map the final internal state or event into a public output
-
-`workflow` supports that directly with `adaptedUseCase`.
-
-```kotlin
-fun interface AdaptedUseCase<I, E, O> {
-  suspend operator fun invoke(input: I, context: WorkflowContext): Either<E, O>
-
-  suspend operator fun invoke(input: I): Either<E, O> =
-    invoke(input, WorkflowContext())
-}
-```
-
-An adapted use case gives application code a callable use case with public input, boundary errors, and public output.
-
-Use `adaptedUseCase(name = "...", errors = ...) { ... }` with `state<StateType>()` when the public result should be derived from the final workflow state and errors should be mapped to an application type:
-
-```kotlin
-val registerUser: AdaptedUseCase<RegisterUserCommand, ApplicationError, UserDto> =
-  adaptedUseCase(
-    name = "RegisterUser",
-    errors = WorkflowError::toApplicationError,
-  ) {
-    input(::RegisterUserInternalCommand)
-    workflow {
-      startWith { command -> command.toValidatedState() }
-      then(HashPasswordStep(passwordHasher))
-      then(PersistUserStep(userRepository, userIdGenerator))
-    }
+val registerUser: UseCase<RegisterUserCommand, WorkflowError, UserDto> =
+  useCase(name = "RegisterUser") {
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
     result(state<RegisteredUserState>()) { state -> state.user.toDto() }
   }
 ```
 
-Use `event<EventType>()` when the natural boundary result is an emitted event:
+Use `event<EventType>()` when the natural output is an emitted event:
 
 ```kotlin
-val registerUserEvent: AdaptedUseCase<RegisterUserCommand, ApplicationError, UserRegisteredEvent> =
-  adaptedUseCase(
+val registerUserEvent: UseCase<RegisterUserCommand, ApplicationError, UserRegisteredEvent> =
+  useCase(
     name = "RegisterUser",
     errors = WorkflowError::toApplicationError,
   ) {
-    input(::RegisterUserInternalCommand)
-    workflow {
-      startWith { command -> command.toValidatedState() }
-      then(HashPasswordStep(passwordHasher))
-      then(PersistUserStep(userRepository, userIdGenerator))
-    }
+    startWith { command -> command.toValidatedState() }
+    then(HashPasswordStep(passwordHasher))
+    then(PersistUserStep(userRepository, userIdGenerator))
     result(event<UserRegisteredEvent>()) { event -> event }
   }
 ```
 
-If raw workflow errors are acceptable, omit `errors = ...`:
-
-```kotlin
-val registerUser: AdaptedUseCase<RegisterUserCommand, WorkflowError, UserDto> =
-  adaptedUseCase(name = "RegisterUser") {
-    input(::RegisterUserInternalCommand)
-    workflow {
-      startWith { command -> command.toValidatedState() }
-      then(HashPasswordStep(passwordHasher))
-      then(PersistUserStep(userRepository, userIdGenerator))
-    }
-    result(state<RegisteredUserState>()) { state -> state.user.toDto() }
-  }
-```
-
-The `errors = ...` mapper is expected to be total and non-throwing. If you need raw workflow errors, omit it.
-
-Event projection follows the same semantics as `executeForEvent(...)`: the adapted use case selects the last emitted event of the requested type. State projection follows the same semantics as `executeForState(...)`: the adapted use case requires the final state to match the requested type.
+The `errors = ...` mapper is expected to be total and non-throwing. State projection requires the final workflow state to match the requested type. Event projection selects the last emitted event of the requested type.
 
 When the boundary needs correlation IDs or other request-scoped metadata, pass an initial `WorkflowContext` at invocation time:
 
@@ -613,7 +414,7 @@ The Workflow pattern establishes a clear flow of typed state and events:
 2. **Stateful Workflows**: Each workflow executes with the current `WorkflowState`, emits events, and returns an updated state bundled inside `WorkflowResult`.
 3. **Result Merging**: `WorkflowResult.mergePrevious` keeps previous events/context while carrying the latest state forward, maintaining deterministic ordering.
 4. **Continuation**: The next workflow in the chain receives the new state and repeats the process.
-5. **Final Result**: When the chain completes, the UseCase can expose the final state, accumulated events, and context through `UseCaseResult`.
+5. **Final Result**: When the chain completes, the UseCase projects the final state or emitted event into the public output type configured with `result(...)`.
 
 This state-first model keeps the data flow explicit and reduces the need for fragile auto-mapping between workflows.
 
@@ -625,18 +426,18 @@ This state-first model keeps the data flow explicit and reduces the need for fra
 - **Data Flow Visibility**: The transformation of data between workflows is explicit and traceable
 - **Immutable History**: Events represent an immutable history of what has occurred, supporting audit and debugging needs
 
-### The Workflow DSL
+### The UseCase DSL
 
-The Workflow DSL (Domain Specific Language) provides a fluent, declarative way to compose workflows into use cases. It handles the complexity of workflow orchestration, data mapping, and error management, allowing you to focus on defining your business processes.
+The UseCase DSL (Domain Specific Language) provides a fluent, declarative way to compose workflows into callable use cases. It handles workflow orchestration, error mapping, and result projection, allowing you to focus on defining your business process.
 
 #### Core DSL Methods
 
 ##### `useCase { ... }`
 
-- **Purpose**: Entry point for creating a use case using the builder pattern
+- **Purpose**: Entry point for creating a callable use case with the DSL
 - **Usage**: Wraps all other DSL methods in a configuration block
-- **How it works**: Initializes a use case builder and returns a fully configured `UseCase<C>` instance
-- **Example**: `val myUseCase = useCase<MyCommand>(name = "MyUseCase") { ... }`
+- **How it works**: Initializes a use case builder and returns a fully configured `UseCase<I, E, O>` instance
+- **Example**: `val myUseCase: UseCase<MyCommand, WorkflowError, MyOutput> = useCase(name = "MyUseCase") { ... }`
 - **Logging**: The optional `name` is the safe operational name emitted in debug-level invocation logs.
 
 ##### `startWith { ... }`
@@ -645,7 +446,7 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 - **Usage**: Must be the first method invoked and converts the incoming command/query into a typed state
 - **How it works**: Returns an `Either<WorkflowError, S>` where `S : WorkflowState`, setting the foundation for the rest of the pipeline
 - **Example**:
-  ```
+  ```kotlin
   startWith { command ->
     Either.Right(InitialOrderState(
       orderId = command.orderId,
@@ -674,7 +475,7 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 - **Usage**: Run independent workflows that observe the current state but don’t produce a new one
 - **How it works**: Executes each branch in its own coroutine, aggregates events/context, and returns the **original state** along with the combined metadata. Any state changes within parallel branches are discarded; it is intended for side-effects like logging or independent validation.
 - **Example**:
-  ```
+  ```kotlin
   parallel {
     then(checkInventoryWorkflow)
     then(processPaymentWorkflow)
@@ -687,7 +488,7 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 - **Usage**: Use when multiple branches need the same input state and you want to build a composite state plus events
 - **How it works**: Runs the branches in parallel, collects each branch’s `WorkflowState`, merges them with the provided lambda, and preserves all branch events before appending the merged one
 - **Example**:
-  ```
+  ```kotlin
   parallelJoin(loadCatalogs, fetchSerp) { catalogs, serp ->
     ReadyForConversion(
       searchId = catalogs.searchId,
@@ -710,17 +511,19 @@ The Workflow DSL (Domain Specific Language) provides a fluent, declarative way t
 
 Simple launch/await example:
 ```kotlin
-useCase<MyCommand>(name = "MyUseCase") {
-  startWith { cmd -> MyState(cmd.id).right() }
-  thenLaunch(LogTelemetryWorkflow("telemetry"))
-  thenLaunch(AuditWorkflow("audit"))
-  awaitLaunched() // wait for telemetry + audit; merge events/context; do not fail on their errors
-  then(NextWorkflow("next")) // continues after side effects are drained
-}
+val myUseCase: UseCase<MyCommand, WorkflowError, MyDto> =
+  useCase(name = "MyUseCase") {
+    startWith { cmd -> MyState(cmd.id).right() }
+    thenLaunch(LogTelemetryWorkflow("telemetry"))
+    thenLaunch(AuditWorkflow("audit"))
+    awaitLaunched() // wait for telemetry + audit; merge events/context; do not fail on their errors
+    then(NextWorkflow("next")) // continues after side effects are drained
+    result(state<MyState>()) { state -> state.toDto() }
+  }
 ```
 
 Cancelling launched workflows after completion:
-Launched work runs in the use case scope. If you don’t call `awaitLaunched()` before returning, you can cancel the whole scope from your caller to stop any lingering work (e.g., wrap `useCase.execute` in `withTimeout` or cancel the job). If you do await, there’s nothing left to cancel.
+Launched work runs in the use case scope. If you don’t call `awaitLaunched()` before returning, you can cancel the whole scope from your caller to stop any lingering work (e.g., wrap the use case invocation in `withTimeout` or cancel the job). If you do await, there’s nothing left to cancel.
 
 #### Data Extraction Methods
 
@@ -866,8 +669,8 @@ Error handling in workflow-based applications requires careful consideration. Th
 The snippets below assume a suspend context (e.g., inside a suspend function or coroutine scope).
 
 ```kotlin
-when (val result = useCase.execute(command)) {
-  is Either.Right -> println("Success with ${result.value.events.size} events")
+when (val result = useCase(command)) {
+  is Either.Right -> println("Success: ${result.value}")
   is Either.Left -> when (val error = result.value) {
     is WorkflowError.ChainError -> {
       val root = error.error
@@ -894,7 +697,7 @@ Failures never return a `WorkflowResult`. Instead, they return a `WorkflowError`
 Assumes a suspend context.
 
 ```kotlin
-val result = useCase.execute(command)
+val result = useCase(command)
 result.fold(
   { error ->
     if (error is WorkflowError.ExecutionContextError) {
@@ -903,7 +706,7 @@ result.fold(
       println("Workflow ${exec.workflowId} failed in ${durationMs}ms: ${error.error}")
     }
   },
-  { success -> println("Workflow completed in ${success.context.executions.size} steps") }
+  { success -> println("Use case completed: $success") }
 )
 ```
 
@@ -912,7 +715,7 @@ result.fold(
 Assumes a suspend context.
 
 ```kotlin
-val result = useCase.execute(command)
+val result = useCase(command)
 result.fold(
   { error ->
     if (error is WorkflowError.ChainError) {
@@ -920,7 +723,7 @@ result.fold(
       println("Use case failed at the initial workflow: $root")
     }
   },
-  { success -> println("Use case succeeded with ${success.events.size} events") }
+  { success -> println("Use case succeeded: $success") }
 )
 ```
 
@@ -1077,7 +880,7 @@ class RegisterUserWorkflow(
 }
 
 // In a web adapter or module boundary
-when (val result = registerUserUseCase.executeForEvent<UserRegisteredEvent>(command)) {
+when (val result = registerUserUseCase(command)) {
   is Either.Right -> ResponseEntity.ok(
     RegisterUserResponse(
       userId = result.value.userId,

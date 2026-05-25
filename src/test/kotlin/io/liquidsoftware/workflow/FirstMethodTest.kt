@@ -30,7 +30,7 @@ class FirstMethodTest {
     @Test
     fun `startWith() must be called at least once`() {
         val exception = assertThrows<IllegalStateException> {
-            val useCase = useCase<TestCommand> {
+            val useCase = workflowUseCase<TestCommand> {
                 // No startWith() call
             }
 
@@ -43,7 +43,7 @@ class FirstMethodTest {
     @Test
     fun `startWith() must be the first method called`() {
         val exception = assertThrows<IllegalStateException> {
-            useCase<TestCommand> {
+            workflowUseCase<TestCommand> {
                 this.then(TestWorkflow("test"))
 
                 startWith { command -> Either.Right(TestState(command.id)) }
@@ -56,7 +56,7 @@ class FirstMethodTest {
     @Test
     fun `startWith() cannot be called more than once`() {
         val exception = assertThrows<IllegalStateException> {
-            useCase<TestCommand> {
+            workflowUseCase<TestCommand> {
                 startWith { command -> Either.Right(TestState(command.id)) }
                 startWith { command -> Either.Right(TestState(command.id)) }
             }
@@ -67,7 +67,7 @@ class FirstMethodTest {
 
     @Test
     fun `valid usage of startWith() method`() {
-        val useCase = useCase<TestCommand> {
+        val useCase = workflowUseCase<TestCommand> {
             startWith { command -> Either.Right(TestState(command.id)) }
             then(TestWorkflow("test"))
             then(TestWorkflow("next"))

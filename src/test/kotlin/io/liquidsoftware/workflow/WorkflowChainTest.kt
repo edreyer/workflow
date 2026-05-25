@@ -14,7 +14,7 @@ class WorkflowChainTest {
 
   @Test
   fun `should execute workflows in sequence`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       then(StepWorkflow("B", "step-b"))
@@ -29,7 +29,7 @@ class WorkflowChainTest {
 
   @Test
   fun `should return error when workflow fails`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(FailingWorkflow("fail"))
       then(StepWorkflow("B", "step-b"))
@@ -44,7 +44,7 @@ class WorkflowChainTest {
 
   @Test
   fun `should return error when workflow throws`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(ThrowingWorkflow("throw"))
       then(StepWorkflow("B", "step-b"))
@@ -59,7 +59,7 @@ class WorkflowChainTest {
 
   @Test
   fun `should execute next workflow when predicate is true`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       thenIf(StepWorkflow("B", "step-b")) { result ->
@@ -76,7 +76,7 @@ class WorkflowChainTest {
 
   @Test
   fun `should skip next workflow when predicate is false`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       thenIf(StepWorkflow("B", "step-b")) { _ -> false }
@@ -91,7 +91,7 @@ class WorkflowChainTest {
 
   @Test
   fun `should execute parallel side effects and preserve event order`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       parallel {
@@ -110,7 +110,7 @@ class WorkflowChainTest {
 
   @Test
   fun `should return error when parallel side effect fails`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       parallel {
         then(FailingWorkflow("fail-parallel"))
@@ -127,7 +127,7 @@ class WorkflowChainTest {
 
   @Test
   fun `executeDetailed should expose final state and context`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       then(StepWorkflow("B", "step-b"))
@@ -144,7 +144,7 @@ class WorkflowChainTest {
 
   @Test
   fun `executeForEvent should project the last matching event`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       then(StepWorkflow("B", "step-b"))
@@ -158,7 +158,7 @@ class WorkflowChainTest {
 
   @Test
   fun `executeForState should project the final state`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       then(StepWorkflow("B", "step-b"))
@@ -172,7 +172,7 @@ class WorkflowChainTest {
 
   @Test
   fun `executeProjected should allow custom projections`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
       then(StepWorkflow("B", "step-b"))
@@ -190,7 +190,7 @@ class WorkflowChainTest {
 
   @Test
   fun `executeProjected should propagate projector failures`() {
-    val useCase: UseCase<TestCommand> = useCase {
+    val useCase: WorkflowUseCase<TestCommand> = workflowUseCase {
       startWith { command -> Either.Right(TestState(command.id)) }
       then(StepWorkflow("A", "step-a"))
     }
@@ -209,7 +209,7 @@ class WorkflowChainTest {
 
   @Test
   fun `executeForEvent should return composition error when event missing`() {
-    val useCase = object : UseCase<TestCommand>() {
+    val useCase = object : WorkflowUseCase<TestCommand>() {
       override suspend fun executeUseCase(
         command: TestCommand,
         context: WorkflowContext
@@ -226,7 +226,7 @@ class WorkflowChainTest {
 
   @Test
   fun `executeForState should return composition error when legacy use case has no typed state`() {
-    val useCase = object : UseCase<TestCommand>() {
+    val useCase = object : WorkflowUseCase<TestCommand>() {
       override suspend fun executeUseCase(
         command: TestCommand,
         context: WorkflowContext
@@ -249,7 +249,7 @@ class WorkflowChainTest {
 
   @Test
   fun `direct use case subclasses should still support executeDetailed`() {
-    val useCase = object : UseCase<TestCommand>() {
+    val useCase = object : WorkflowUseCase<TestCommand>() {
       override suspend fun executeUseCase(
         command: TestCommand,
         context: WorkflowContext
@@ -291,7 +291,7 @@ class WorkflowChainTest {
       }
     }
 
-    val useCase = useCase<TestCommand> {
+    val useCase = workflowUseCase<TestCommand> {
       startWith { cmd -> Either.Right(TestState(cmd.id)) }
       then(ContextSettingWorkflow("set"))
       then(ContextReadingWorkflow("read"))
@@ -317,7 +317,7 @@ class WorkflowChainTest {
       }
     }
 
-    val useCase = useCase<TestCommand> {
+    val useCase = workflowUseCase<TestCommand> {
       startWith { cmd -> Either.Right(TestState(cmd.id)) }
       then(ContextReadingWorkflow("read"))
     }

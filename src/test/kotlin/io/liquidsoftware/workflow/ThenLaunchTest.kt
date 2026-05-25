@@ -69,7 +69,7 @@ class ThenLaunchTest {
 
   @Test
   fun `thenLaunch side effects merge when awaited`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(SideEffectWorkflow("side-1", "first"))
       thenLaunch(SideEffectWorkflow("side-2", "second", delayMs = 10))
@@ -85,7 +85,7 @@ class ThenLaunchTest {
 
   @Test
   fun `awaitLaunched records failures without failing the chain`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(FailingSideEffect("bad"), timeout = Duration.ofMillis(50))
       awaitLaunched()
@@ -101,7 +101,7 @@ class ThenLaunchTest {
 
   @Test
   fun `awaitLaunched merges context and events from launched workflows`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(ContextSideEffect("c1", "k1", "v1"))
       thenLaunch(ContextSideEffect("c2", "k2", "v2"))
@@ -117,7 +117,7 @@ class ThenLaunchTest {
 
   @Test
   fun `awaitLaunched records failures alongside successes`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(SideEffectWorkflow("ok", "good"))
       thenLaunch(FailingSideEffect("bad"))
@@ -135,7 +135,7 @@ class ThenLaunchTest {
 
   @Test
   fun `thenLaunch timeout yields failure event`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(SideEffectWorkflow("slow", "late", delayMs = 200), timeout = Duration.ofMillis(50))
       awaitLaunched()
@@ -150,7 +150,7 @@ class ThenLaunchTest {
 
   @Test
   fun `multiple launch batches stay isolated`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(SideEffectWorkflow("first", "a1"))
       awaitLaunched()
@@ -167,7 +167,7 @@ class ThenLaunchTest {
 
   @Test
   fun `double await with no pending is a no-op`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       awaitLaunched()
       awaitLaunched()
@@ -181,7 +181,7 @@ class ThenLaunchTest {
 
   @Test
   fun `awaitLaunched responds to cancellation`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(SideEffectWorkflow("long", "late", delayMs = 500))
       awaitLaunched()
@@ -201,7 +201,7 @@ class ThenLaunchTest {
 
   @Test
   fun `awaitLaunched preserves state for subsequent workflow`() {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(SideEffectWorkflow("first", "e1"))
       awaitLaunched()
@@ -217,7 +217,7 @@ class ThenLaunchTest {
 
   @Test
   fun `concurrent invocations isolate launched workflows per use case execution`() = runBlocking {
-    val useCase = useCase<SeedCommand> {
+    val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }
       thenLaunch(SideEffectWorkflow("side-effect", delayMs = 25))
       awaitLaunched()

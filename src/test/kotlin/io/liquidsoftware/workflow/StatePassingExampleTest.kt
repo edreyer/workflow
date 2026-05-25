@@ -13,7 +13,7 @@ class StatePassingExampleTest {
 
   @Test
   fun `should execute a state passing pipeline`() = runBlocking {
-    val useCase = useCase<RegisterCustomerCommand> {
+    val useCase = workflowUseCase<RegisterCustomerCommand> {
       startWith { command -> Either.Right(RegistrationState(command.email, command.name)) }
       then(validateCustomerWorkflow)
       then(createCustomerWorkflow)

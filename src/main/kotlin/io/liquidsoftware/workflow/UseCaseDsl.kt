@@ -5,14 +5,12 @@ import arrow.core.flatMap
 import kotlin.reflect.KClass
 
 /**
- * A use case adapted to an application or module boundary.
+ * A callable application use case.
  *
- * `AdaptedUseCase` accepts public input, returns public output, and can map
- * workflow-native errors to an application-specific error type. Use
- * [adaptedUseCase] when application code should call the use case directly
- * instead of working with workflow commands, states, events, and projections.
+ * `UseCase` accepts public input, returns public output, and may map
+ * workflow-native errors to an application-specific error type.
  */
-fun interface AdaptedUseCase<I, E, O> {
+fun interface UseCase<I, E, O> {
   /**
    * Runs the use case with explicit workflow context such as correlation IDs.
    */
@@ -26,26 +24,10 @@ fun interface AdaptedUseCase<I, E, O> {
 }
 
 /**
- * DSL builder for [adaptedUseCase].
+ * DSL builder for [useCase].
  */
-class AdaptedUseCaseBuilder<I, C : UseCaseCommand, O> {
-  private var inputMapper: ((I) -> C)? = null
-  private var workflowFactory: (WorkflowChainBuilderFactory<C>.() -> Unit)? = null
+class UseCaseBuilder<I : UseCaseCommand, O> : WorkflowChainBuilderFactory<I>() {
   private var resultProjection: UseCaseResultProjection<O>? = null
-
-  /**
-   * Maps public input into the internal workflow command.
-   */
-  fun input(mapper: (I) -> C) {
-    inputMapper = mapper
-  }
-
-  /**
-   * Defines the workflow steps that implement this use case.
-   */
-  fun workflow(block: WorkflowChainBuilderFactory<C>.() -> Unit) {
-    workflowFactory = block
-  }
 
   /**
    * Defines a custom projection from the complete workflow result to public output.
@@ -74,27 +56,17 @@ class AdaptedUseCaseBuilder<I, C : UseCaseCommand, O> {
     resultProjection = source.toProjection(mapper)
   }
 
-  internal fun <E> build(
+  internal fun <E> buildUseCase(
     name: String?,
     errorMapper: (WorkflowError) -> E
-  ): AdaptedUseCase<I, E, O> {
-    val inputMapper = requireNotNull(inputMapper) { "adaptedUseCase input mapper is required" }
-    val workflowFactory = requireNotNull(workflowFactory) { "adaptedUseCase workflow is required" }
-    val resultProjection = requireNotNull(resultProjection) { "adaptedUseCase result projection is required" }
-    val rawUseCase = useCase(name, workflowFactory)
-    val useCaseName = rawUseCase.name
-    val adaptedExecution = object : UseCase<AdaptedUseCaseInput<I>>(name) {
-      override suspend fun executeUseCase(
-        command: AdaptedUseCaseInput<I>,
-        context: WorkflowContext
-      ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
-        mapInput(inputMapper, command.input)
-          .flatMap { mappedCommand -> rawUseCase.executeWithoutLogging(mappedCommand, context) }
-    }
+  ): UseCase<I, E, O> {
+    val resultProjection = requireNotNull(resultProjection) { "useCase result projection is required" }
+    val workflowUseCase = build(name)
+    val useCaseName = workflowUseCase.name
 
-    return AdaptedUseCase { input, context ->
-      adaptedExecution
-        .executeProjected(AdaptedUseCaseInput(input), context) { result ->
+    return UseCase { input, context ->
+      workflowUseCase
+        .executeProjected(input, context) { result ->
           resultProjection.project(result, useCaseName)
         }
         .mapLeft(errorMapper)
@@ -102,44 +74,38 @@ class AdaptedUseCaseBuilder<I, C : UseCaseCommand, O> {
   }
 }
 
-private data class AdaptedUseCaseInput<I>(val input: I) : UseCaseCommand
-
 /**
- * Builds an application-facing use case that preserves raw [WorkflowError] values.
+ * Builds a callable application use case that preserves raw [WorkflowError] values.
  *
- * Use this overload when callers are expected to handle workflow-native errors.
- * If the boundary should expose an application-specific error type, use the
- * overload with `errors = ...`.
- *
- * @param name Optional safe operational name forwarded to the underlying [UseCase]
- * for debug-level invocation logs. Do not include user data or request data.
+ * @param name Optional safe operational name used in debug-level invocation logs.
+ * Do not include user data or request data in this value.
  */
-fun <I, C : UseCaseCommand, O> adaptedUseCase(
+fun <I : UseCaseCommand, O> useCase(
   name: String? = null,
-  configure: AdaptedUseCaseBuilder<I, C, O>.() -> Unit,
-): AdaptedUseCase<I, WorkflowError, O> {
-  val builder = AdaptedUseCaseBuilder<I, C, O>()
+  configure: UseCaseBuilder<I, O>.() -> Unit,
+): UseCase<I, WorkflowError, O> {
+  val builder = UseCaseBuilder<I, O>()
   builder.configure()
-  return builder.build(name) { error -> error }
+  return builder.buildUseCase(name) { error -> error }
 }
 
 /**
- * Builds an application-facing use case with mapped boundary errors.
+ * Builds a callable application use case with mapped boundary errors.
  *
  * The [errors] mapper should be total and non-throwing. It is applied to
  * workflow execution errors and result-projection errors.
  *
- * @param name Optional safe operational name forwarded to the underlying [UseCase]
- * for debug-level invocation logs. Do not include user data or request data.
+ * @param name Optional safe operational name used in debug-level invocation logs.
+ * Do not include user data or request data in this value.
  */
-fun <I, C : UseCaseCommand, E, O> adaptedUseCase(
+fun <I : UseCaseCommand, E, O> useCase(
   name: String? = null,
   errors: (WorkflowError) -> E,
-  configure: AdaptedUseCaseBuilder<I, C, O>.() -> Unit,
-): AdaptedUseCase<I, E, O> {
-  val builder = AdaptedUseCaseBuilder<I, C, O>()
+  configure: UseCaseBuilder<I, O>.() -> Unit,
+): UseCase<I, E, O> {
+  val builder = UseCaseBuilder<I, O>()
   builder.configure()
-  return builder.build(name, errors)
+  return builder.buildUseCase(name, errors)
 }
 
 /**
@@ -158,13 +124,13 @@ class EventResultSource<Ev : Event> @PublishedApi internal constructor(
 )
 
 /**
- * Selects the final workflow state as the source for an adapted result.
+ * Selects the final workflow state as the source for use-case output.
  */
 inline fun <reified S : WorkflowState> state(): StateResultSource<S> =
   StateResultSource(S::class)
 
 /**
- * Selects the last emitted event of this type as the source for an adapted result.
+ * Selects the last emitted event of this type as the source for use-case output.
  */
 inline fun <reified Ev : Event> event(): EventResultSource<Ev> =
   EventResultSource(Ev::class)
@@ -222,14 +188,6 @@ private fun <Ev : Event> UseCaseResult<WorkflowState>.requireLastEvent(
     )
   }
 }
-
-@PublishedApi
-internal fun <I, C : UseCaseCommand> mapInput(
-  inputMapper: (I) -> C,
-  input: I,
-): Either<WorkflowError, C> =
-  Either.catch { inputMapper(input) }
-    .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
 
 @PublishedApi
 internal fun <O> mapProjectionOutput(
