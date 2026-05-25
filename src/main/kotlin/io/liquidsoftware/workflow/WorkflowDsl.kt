@@ -3,15 +3,16 @@ package io.liquidsoftware.workflow
 import arrow.core.Either
 import arrow.core.flatMap
 import arrow.core.raise.either
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
-import kotlinx.coroutines.CancellationException
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 import kotlin.reflect.KTypeParameter
@@ -359,21 +360,23 @@ open class WorkflowChainBuilderFactory<C : UseCaseCommand> {
       override suspend fun executeUseCase(
         command: C,
         context: WorkflowContext
-      ): Either<WorkflowError, UseCaseResult<WorkflowState>> = either {
-        val initialState =
-          Either.catch { startFactory(command) }
-            .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
-            .bind()
-            .bind()
-        val initialResult = WorkflowResult(initialState, context = context)
-        val executionScope = WorkflowExecutionScope()
-        @Suppress("UNCHECKED_CAST")
-        val start: Either<WorkflowError, WorkflowResult<WorkflowState>> =
-          Either.Right(initialResult) as Either<WorkflowError, WorkflowResult<WorkflowState>>
-        val finalResult = pipelineSteps.fold(start) { acc, step ->
-          acc.flatMap { current -> step.execute(current, executionScope) }
-        }.bind()
-        finalResult.toUseCaseResult()
+      ): Either<WorkflowError, UseCaseResult<WorkflowState>> = coroutineScope {
+        val executionScope = WorkflowExecutionScope(this)
+        either {
+          val initialState =
+            Either.catch { startFactory(command) }
+              .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
+              .bind()
+              .bind()
+          val initialResult = WorkflowResult(initialState, context = context)
+          @Suppress("UNCHECKED_CAST")
+          val start: Either<WorkflowError, WorkflowResult<WorkflowState>> =
+            Either.Right(initialResult) as Either<WorkflowError, WorkflowResult<WorkflowState>>
+          val finalResult = pipelineSteps.fold(start) { acc, step ->
+            acc.flatMap { current -> step.execute(current, executionScope) }
+          }.bind()
+          finalResult.toUseCaseResult()
+        }
       }
     }
   }
@@ -386,7 +389,9 @@ internal interface WorkflowStep {
   ): Either<WorkflowError, WorkflowResult<WorkflowState>>
 }
 
-internal class WorkflowExecutionScope {
+internal class WorkflowExecutionScope(
+  val coroutineScope: CoroutineScope,
+) {
   val launchedJobs = mutableListOf<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>()
 }
 
@@ -477,12 +482,12 @@ private class LaunchStep<I : WorkflowState>(
   override suspend fun execute(
     result: WorkflowResult<WorkflowState>,
     executionScope: WorkflowExecutionScope,
-  ): Either<WorkflowError, WorkflowResult<WorkflowState>> = coroutineScope {
+  ): Either<WorkflowError, WorkflowResult<WorkflowState>> {
     val input = castState(result.state, workflow).fold(
-      { error -> return@coroutineScope Either.Left(error) },
+      { error -> return Either.Left(error) },
       { value -> value }
     )
-    val deferred: Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>> = async {
+    val deferred: Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>> = executionScope.coroutineScope.async {
       try {
         val execution = if (timeout != null) {
           withTimeout(timeout.toMillis()) { workflow.execute(input, result.context) }
@@ -497,7 +502,7 @@ private class LaunchStep<I : WorkflowState>(
       }
     }
     executionScope.launchedJobs.add(deferred)
-    Either.Right(result)
+    return Either.Right(result)
   }
 }
 

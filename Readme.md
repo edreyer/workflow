@@ -523,7 +523,7 @@ val myUseCase: UseCase<MyCommand, WorkflowError, MyDto> =
 ```
 
 Cancelling launched workflows after completion:
-Launched work runs in the use case scope. If you don’t call `awaitLaunched()` before returning, you can cancel the whole scope from your caller to stop any lingering work (e.g., wrap the use case invocation in `withTimeout` or cancel the job). If you do await, there’s nothing left to cancel.
+Launched work runs in the use case invocation scope. If you don’t call `awaitLaunched()`, launched work can still overlap with later workflow steps, but it remains bound to the same use case invocation and can be cancelled by cancelling that invocation (e.g., wrap the call in `withTimeout` or cancel the job). If you do await, there’s nothing left to cancel.
 
 #### Data Extraction Methods
 

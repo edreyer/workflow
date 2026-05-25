@@ -2,6 +2,7 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import arrow.core.raise.either
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -65,6 +66,28 @@ class ThenLaunchTest {
     }
   }
 
+  class DeferredSideEffectWorkflow(
+    override val id: String,
+    private val release: CompletableDeferred<Unit>,
+  ) : Workflow<SeedState, SeedState>() {
+    override suspend fun executeWorkflow(input: SeedState): Either<WorkflowError, WorkflowResult<SeedState>> = either {
+      release.await()
+      WorkflowResult(input, listOf(SideEffectEvent(UUID.randomUUID(), Instant.EPOCH, "released")))
+    }
+  }
+
+  class ReleasingWorkflow(
+    override val id: String,
+    private val release: CompletableDeferred<Unit>,
+    private val onStart: () -> Unit,
+  ) : Workflow<SeedState, SeedState>() {
+    override suspend fun executeWorkflow(input: SeedState): Either<WorkflowError, WorkflowResult<SeedState>> = either {
+      onStart()
+      release.complete(Unit)
+      WorkflowResult(input, listOf(SideEffectEvent(UUID.randomUUID(), Instant.EPOCH, "releaser")))
+    }
+  }
+
   data class SeedCommand(val value: String) : UseCaseCommand
 
   @Test
@@ -81,6 +104,27 @@ class ThenLaunchTest {
     assertTrue(result is Either.Right)
     val labels = result.value.events.filterIsInstance<SideEffectEvent>().map { it.label }.sorted()
     assertEquals(listOf("first", "second"), labels)
+  }
+
+  @Test
+  fun `thenLaunch does not block subsequent workflow steps before await`() {
+    val releaseLaunchedWorkflow = CompletableDeferred<Unit>()
+    var nextStepStarted = false
+    val useCase = workflowUseCase<SeedCommand> {
+      startWith { command -> Either.Right(SeedState(command.value)) }
+      thenLaunch(DeferredSideEffectWorkflow("blocked-side-effect", releaseLaunchedWorkflow))
+      then(ReleasingWorkflow("next", releaseLaunchedWorkflow) { nextStepStarted = true })
+      awaitLaunched()
+    }
+
+    val result = runBlocking {
+      withTimeout(1_000L) { useCase.execute(SeedCommand("ok")) }
+    }
+
+    assertTrue(result is Either.Right)
+    assertTrue(nextStepStarted)
+    val labels = result.value.events.filterIsInstance<SideEffectEvent>().map { it.label }.sorted()
+    assertEquals(listOf("released", "releaser"), labels)
   }
 
   @Test
