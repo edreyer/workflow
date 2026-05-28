@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 - Unreleased
+## 0.7.0 - 2026-05-28
 
 - Replaced the v0.6.0 typed-boundary API with a single callable `UseCase<I, E, O>` model.
 - Changed the primary `useCase { ... }` DSL to define public input, workflow steps, error mapping, and output projection in one place.
