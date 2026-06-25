@@ -13,7 +13,7 @@ The DSL supports global defaults plus per-use-case logging configuration.
 Global defaults apply to every `useCase` unless overridden:
 
 ```kotlin
-configureUseCaseLogging {
+useCaseLoggingGlobalConfig {
   outcomeStyle(AnsiOutcomeStyle.Enabled)
   includeDefaultSummaryFields()
 }
