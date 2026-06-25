@@ -14,8 +14,9 @@ Global defaults apply to every `useCase` unless overridden:
 
 ```kotlin
 useCaseLoggingGlobalConfig {
-  outcomeStyle(AnsiOutcomeStyle.Enabled)
-  includeDefaultSummaryFields()
+  outcomeStyle(OutcomeStyle.Plain)
+  defaultSummaryFields(DefaultSummaryFields.Enabled)
+  fieldRendering(FieldRendering.KeyValue)
 }
 ```
 
@@ -79,25 +80,78 @@ Success logging supports:
 
 Projection failures in logging must not change the use-case result. If a logging projection throws or cannot find its expected state/event, the library emits a small debug log about the logging projection failure and returns the original use-case result.
 
-## Outcome Color
+## Global Configuration Options
 
-Outcome coloring is optional and should be disabled by default.
+Global configuration controls common formatting and safe operational metadata. It does not configure domain-specific state, event, output, or typed error fields. Those fields belong in each use case's `logging { ... }` block.
 
-When enabled, only the outcome value is colored:
+### outcomeStyle
+
+`outcomeStyle` controls how `outcome=success` and `outcome=failure` are rendered.
+
+```kotlin
+enum class OutcomeStyle {
+  Plain,
+  AnsiColor
+}
+```
+
+The default is `OutcomeStyle.Plain`:
+
+```text
+outcome=success
+outcome=failure
+```
+
+`OutcomeStyle.AnsiColor` colors only the outcome value:
 
 ```text
 outcome=<green>success</green>
 outcome=<red>failure</red>
 ```
 
-The structured key remains `outcome`, so existing logs remain searchable. The public option is:
+The structured key remains `outcome`, so existing logs remain searchable. ANSI color is useful for local console logs, but it is disabled by default because escape sequences can make CI logs, JSON logs, Sentry breadcrumbs, and centralized log searches harder to work with.
+
+### defaultSummaryFields
+
+`defaultSummaryFields` controls whether the built-in operational fields are emitted automatically.
 
 ```kotlin
-enum class AnsiOutcomeStyle {
+enum class DefaultSummaryFields {
   Disabled,
   Enabled
 }
 ```
+
+The default is `DefaultSummaryFields.Enabled`, which includes:
+
+- `durationMs`
+- `events`
+- `workflows`
+
+These fields are safe because they are operational counts and timings rather than command, state, event, output, or error payloads.
+
+`DefaultSummaryFields.Disabled` emits only the required base fields and any explicitly configured logging fields:
+
+- `name`
+- `outcome`
+
+### fieldRendering
+
+`fieldRendering` controls how configured fields are appended to the final log message.
+
+```kotlin
+enum class FieldRendering {
+  KeyValue
+}
+```
+
+The default is `FieldRendering.KeyValue`:
+
+```text
+UseCase invocation finished name=RegisterUser outcome=failure durationMs=12 events=0 workflows=1 errorType=Validation reason=MissingEmail retryable=false
+```
+
+The first version supports only `KeyValue`. JSON rendering is intentionally out of scope because logger encoders and application logging infrastructure usually own JSON serialization, escaping, and nesting.
 
 ## Implementation Hook
 
