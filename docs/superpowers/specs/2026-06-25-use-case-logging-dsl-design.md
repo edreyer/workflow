@@ -78,6 +78,10 @@ Success logging supports:
 - `success(state<T>()) { ... }`
 - `success(event<T>()) { ... }`
 
+Success projections are type-constrained to `T : WorkflowState` or `T : Event`, matching the existing `result(state<T>())` and `result(event<T>())` APIs. The compiler verifies the projection type category, while the library verifies at runtime that the current use case actually ended with that state type or emitted that event type.
+
+Failure logging is compile-time typesafe for the current use case's mapped public error type `E`. A `useCase<I, RegisterUserError, O>` accepts `failure { error: RegisterUserError -> ... }` and rejects failure loggers for unrelated error types.
+
 Projection failures in logging must not change the use-case result. If a logging projection throws or cannot find its expected state/event, the library emits a small debug log about the logging projection failure and returns the original use-case result.
 
 ## Global Configuration Options
