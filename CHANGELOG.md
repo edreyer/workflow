@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Updated Kotlin to 2.4.0.
+- Verified the build with the existing Java 25 toolchain.
 - Added startup-time `useCaseLoggingGlobalConfig { ... }` for configuring use case invocation log formatting.
 - Added `OutcomeStyle` and `DefaultSummaryFields` options for plain/ANSI outcomes and built-in summary fields.
 - Added a type-safe per-use-case `logging { ... }` DSL for explicit success and failure log fields.
