@@ -93,6 +93,28 @@ class UseCaseDslTest {
   }
 
   @Test
+  fun `failure logging lambda is typed to mapped use case error`() = runBlocking {
+    val useCase: UseCase<PublicInput, BoundaryError, PublicOutput> =
+      useCase(
+        errors = ::toBoundaryError,
+      ) {
+        startWith { _: PublicInput -> Either.Left(WorkflowError.ValidationError("bad input")) }
+        result(state<TestState>()) { state -> PublicOutput(state.steps.joinToString(",")) }
+        logging {
+          failure { error ->
+            val boundaryMessage: String = error.message
+            field("messageLength", boundaryMessage.length)
+          }
+        }
+      }
+
+    val result = useCase(PublicInput(UUID.randomUUID()))
+
+    assertTrue(result.isLeft())
+    assertEquals("bad input", (result as Either.Left).value.message)
+  }
+
+  @Test
   fun `useCase returns raw WorkflowError when errors mapper is omitted`() = runBlocking {
     val useCase: UseCase<PublicInput, WorkflowError, PublicOutput> =
       useCase {

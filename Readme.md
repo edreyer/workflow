@@ -16,7 +16,7 @@ public input -> startWith -> workflow state -> workflow steps -> result -> publi
 - Compose sequential, conditional, parallel, and launched side-effect work.
 - Project public output from final state, emitted events, or a custom projection.
 - Return typed errors with `Either`.
-- Get debug invocation logs without logging command, state, event, output, or error payloads.
+- Get configurable debug invocation logs without logging command, state, event, output, or error payloads by default.
 
 For the architectural motivation, see [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md).
 
@@ -174,10 +174,14 @@ result(
 | `then(workflow)` | Run the next workflow after the previous state is available. |
 | `thenIf(workflow) { result -> ... }` | Run a workflow only when the current result satisfies a condition. |
 | `parallel { then(...) }` | Run independent side-effect workflows and preserve the current state. |
-| `parallelJoin(...) { ... }` | Run independent state-producing workflows and merge their outputs into a new state. |
-| `thenLaunch(workflow)` | Start side-effect work without blocking the main chain. |
+| `parallelJoin(...) { ... }` | Run 2 through 8 independent state-producing workflows and merge their outputs into a new state. |
+| `parallelJoin(..., ParallelErrorPolicy.FailFast) { ... }` | Cancel remaining parallel-join branches on the first failure. |
+| `thenLaunch(workflow, timeout = ...)` | Start side-effect work without blocking the main chain. |
 | `awaitLaunched()` | Await launched side-effect work later and merge its events/context. |
-| `result(...)` | Choose the public output. Required for `useCase`. |
+| `result(state<T>()) { ... }` | Project public output from the final workflow state. Required for `useCase`. |
+| `result(event<T>()) { ... }` | Project public output from the last emitted event of type `T`. |
+| `result(UseCaseResultProjection { ... })` | Project public output from detailed state, events, and context. |
+| `logging { ... }` | Add explicit success/failure fields to debug finish logs. |
 
 For deeper API notes, see [Workflow Reference](docs/reference.md).
 
@@ -212,7 +216,7 @@ The `errors` mapper should be total and non-throwing. For the error model and fa
 
 ## Observability And Data Safety
 
-Use cases emit debug-level SLF4J logs when they start and finish. These logs include operational metadata only:
+Use cases emit debug-level SLF4J logs when they start and finish. By default these logs include safe operational metadata only:
 
 - use case name
 - success or failure outcome
@@ -220,7 +224,53 @@ Use cases emit debug-level SLF4J logs when they start and finish. These logs inc
 - emitted event count
 - executed workflow count
 
-They do not log command input, workflow state, event payloads, projected output, or error messages. Keep `name` stable and free of user data.
+They do not log command input, workflow state, event payloads, projected output, or error payloads unless you explicitly project fields. Keep `name` stable and free of user data.
+
+Global formatting can be configured once at application startup:
+
+```kotlin
+useCaseLoggingGlobalConfig {
+  outcomeStyle(OutcomeStyle.Plain)
+  defaultSummaryFields(DefaultSummaryFields.Enabled)
+}
+```
+
+The global options control only formatting and safe built-in metadata:
+
+- `outcomeStyle(OutcomeStyle.Plain)` keeps `outcome=success` and `outcome=failure` uncolored; `OutcomeStyle.AnsiColor` colors only the outcome value for local console logs.
+- `defaultSummaryFields(DefaultSummaryFields.Enabled)` includes `durationMs`, `events`, and `workflows`; `DefaultSummaryFields.Disabled` leaves only `name`, `outcome`, and explicit fields.
+Log fields render as stable `key=value` pairs.
+
+Per-use-case logging fields are explicit and type-safe:
+
+```kotlin
+val registerUser = useCase(
+  name = "RegisterUser",
+  errors = ::toRegisterUserError
+) {
+  startWith { command -> Either.Right(RegistrationDraft(command.email, command.password)) }
+  then(CreateUserWorkflow(users))
+
+  result(state<RegisteredUser>()) { state ->
+    RegisterUserResponse(state.id)
+  }
+
+  logging {
+    success(state<RegisteredUser>()) { state ->
+      field("userId", state.id)
+    }
+
+    failure { error: RegisterUserError ->
+      field("reason", error.reason)
+      field("retryable", error.retryable)
+    }
+  }
+}
+```
+
+Success logging supports `state<T>()` and `event<T>()` projections. Failure logging is typed to the mapped public error `E`.
+If a logging projection is missing its expected state/event or throws while collecting fields, the use case result is unchanged and the logging failure is reported separately.
+Explicit logging fields cannot use the reserved built-in names `name`, `outcome`, `durationMs`, `events`, or `workflows`.
 
 `toSummary(...)` is available for metrics or custom logging. Error messages are redacted by default; only set `includeErrorMessages = true` when the values are known to be safe.
 
@@ -242,4 +292,5 @@ val detailed = workflow.executeDetailed(command)
 - [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md) explains the design problem this library addresses.
 - [Design Guidance](docs/design-guidance.md) covers when to use this library and how to structure workflows.
 - [Workflow Reference](docs/reference.md) covers DSL methods, errors, context, logging, and lower-level APIs.
+- [Migrating to v0.8.0 Use Case Logging](docs/migrations/0.8.0-use-case-logging.md) explains how to adopt the new logging DSL.
 - [Migrating from v0.6.0 to v0.7.0](docs/migrations/0.7.0-use-cases.md) explains the breaking API changes.

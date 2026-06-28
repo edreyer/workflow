@@ -47,6 +47,78 @@ val useCase: UseCase<Input, WorkflowError, Output> =
 
 `result(...)` is required and can be called only once.
 
+### Comprehensive Example
+
+This example shows the application-facing DSL methods together. The workflow classes are ordinary `Workflow<I, O>` implementations; side-effect workflows are `Workflow<I, I>` steps.
+
+```kotlin
+val registerUser: UseCase<RegisterUserCommand, RegisterUserError, UserDto> =
+  useCase(
+    name = "RegisterUser",
+    errors = ::toRegisterUserError,
+  ) {
+    startWith { command ->
+      if (command.email.isBlank()) {
+        Either.Left(WorkflowError.ValidationError("Email is required"))
+      } else {
+        Either.Right(RegistrationDraft(command.email, command.password))
+      }
+    }
+
+    then(ValidateRegistration())
+
+    thenIf(ApplyInviteCode()) { result ->
+      result.context.get(INVITE_CODE) != null
+    }
+
+    parallel<ValidRegistration> {
+      then(RecordSignupAttempt())
+      then(PublishRegistrationStarted())
+    }
+
+    parallelJoin(
+      CreateUser(users),
+      CreateUserProfile(profiles),
+      ParallelErrorPolicy.FailFast,
+    ) { user, profile ->
+      RegisteredUser(id = user.id, email = user.email, profileId = profile.id)
+    }
+
+    thenLaunch(SendWelcomeEmail(), timeout = Duration.ofSeconds(2))
+    awaitLaunched()
+
+    result(state<RegisteredUser>()) { state ->
+      UserDto(id = state.id, email = state.email)
+    }
+
+    logging {
+      success(state<RegisteredUser>()) { state ->
+        field("userId", state.id)
+      }
+
+      success(event<UserRegisteredEvent>()) { event ->
+        field("eventId", event.id)
+      }
+
+      failure { error: RegisterUserError ->
+        field("reason", error.reason)
+        field("retryable", error.retryable)
+      }
+    }
+  }
+```
+
+The flow is:
+
+- `startWith` validates public input and creates the initial `WorkflowState`.
+- `then` runs the next state-transforming workflow.
+- `thenIf` runs a workflow only when the current `WorkflowResult` matches the predicate.
+- `parallel` runs side-effect workflows concurrently and keeps the current state.
+- `parallelJoin` runs state-producing workflows concurrently and merges their outputs into a new state.
+- `thenLaunch` starts side-effect work without blocking the main chain; `awaitLaunched` later merges launched events/context.
+- `result(state<T>())` projects public output from the final state.
+- `logging` adds explicit, type-safe fields to the finish log without changing the use-case result.
+
 ## `workflowUseCase`
 
 Use `workflowUseCase` for lower-level code that needs workflow-native details:
@@ -141,7 +213,7 @@ parallelJoin(
 }
 ```
 
-There are overloads for 2 through 8 workflows. Use the overload with `ParallelErrorPolicy` when you need non-default failure behavior.
+There are overloads for 2 through 8 workflows. The default `ParallelErrorPolicy.WaitAll` waits for every branch and returns the first error by parameter order. Use `ParallelErrorPolicy.FailFast` to cancel remaining branches on the first failure.
 
 ### `thenLaunch` And `awaitLaunched`
 
@@ -153,7 +225,7 @@ then(ContinueMainFlow())
 awaitLaunched()
 ```
 
-Use `awaitLaunched()` if later steps or the final result need launched workflow events/context. Launched failures are captured in context and do not fail the main chain when awaited.
+Use `thenLaunch(workflow, timeout = duration)` to bound launched side-effect work. Use `awaitLaunched()` if later steps or the final result need launched workflow events/context. Launched failures are captured in context and do not fail the main chain when awaited.
 
 ## Result Projection
 
@@ -267,6 +339,47 @@ Logged fields are intentionally limited to operational metadata:
 - workflow count
 
 The library does not log command input, state, event payloads, projected output, or error messages.
+
+## Use Case Logging DSL
+
+Global logging configuration controls common formatting and should be set once at application startup before invoking use cases:
+
+```kotlin
+useCaseLoggingGlobalConfig {
+  outcomeStyle(OutcomeStyle.Plain)
+  defaultSummaryFields(DefaultSummaryFields.Enabled)
+}
+```
+
+Options:
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `outcomeStyle` | `OutcomeStyle.Plain`, `OutcomeStyle.AnsiColor` | `OutcomeStyle.Plain` |
+| `defaultSummaryFields` | `DefaultSummaryFields.Enabled`, `DefaultSummaryFields.Disabled` | `DefaultSummaryFields.Enabled` |
+
+Log fields render as stable `key=value` pairs.
+
+Per-use-case logging fields are explicit:
+
+```kotlin
+logging {
+  success(state<RegisteredUser>()) { state ->
+    field("userId", state.id)
+  }
+
+  success(event<UserRegisteredEvent>()) { event ->
+    field("eventId", event.id)
+  }
+
+  failure { error: RegisterUserError ->
+    field("reason", error.reason)
+  }
+}
+```
+
+The library never logs whole commands, states, events, outputs, or errors by default. Log only stable fields that are safe for your runtime environment.
+Explicit fields cannot use the reserved built-in names `name`, `outcome`, `durationMs`, `events`, or `workflows`. Invalid logging fields and thrown logging lambdas are reported as logging projection failures and do not change the use-case result.
 
 `toSummary(...)` can build structured logging or metrics summaries:
 

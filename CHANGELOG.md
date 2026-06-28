@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Added startup-time `useCaseLoggingGlobalConfig { ... }` for configuring use case invocation log formatting.
+- Added `OutcomeStyle` and `DefaultSummaryFields` options for plain/ANSI outcomes and built-in summary fields.
+- Added a type-safe per-use-case `logging { ... }` DSL for explicit success and failure log fields.
+- Added success log projections from `state<T>()` and `event<T>()`; missing projection data is reported as a logging projection failure without changing the use case result.
+- Added failure logging typed to the use case's mapped public error type `E`.
+- Preserved safe default logging: command input, workflow state, event payloads, projected output, and error payloads are not logged unless explicitly projected.
+- Ensured configured logging fields are evaluated only when debug logging is enabled.
+- Reserved built-in log field names (`name`, `outcome`, `durationMs`, `events`, `workflows`) so explicit fields cannot spoof canonical invocation metadata.
+- Changed public `useCase` execution to collect detailed workflow results internally so configured logging fields can be emitted without duplicate low-level invocation logs.
+- Documented the new logging DSL in the README and reference docs.
+- Added a migration guide for adopting v0.8.0 use case logging.
+- Updated Arrow to 2.2.3.
+- Migration note: ordinary `useCase { ... }` consumers do not need changes; consumers with explicit `UseCaseBuilder<I, O>` extension/helper signatures should update them to include the new error type parameter.
+
 ## 0.7.0 - 2026-05-28
 
 - Replaced the v0.6.0 typed-boundary API with a single callable `UseCase<I, E, O>` model.

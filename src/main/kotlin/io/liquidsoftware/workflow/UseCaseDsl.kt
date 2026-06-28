@@ -2,6 +2,8 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import arrow.core.flatMap
+import java.time.Duration
+import java.time.Instant
 import kotlin.reflect.KClass
 
 /**
@@ -26,8 +28,9 @@ fun interface UseCase<I, E, O> {
 /**
  * DSL builder for [useCase].
  */
-class UseCaseBuilder<I : UseCaseCommand, O> internal constructor() : WorkflowChainBuilderFactory<I>() {
+class UseCaseBuilder<I : UseCaseCommand, E, O> internal constructor() : WorkflowChainBuilderFactory<I>() {
   private var resultProjection: UseCaseResultProjection<O>? = null
+  private val loggingBuilder = UseCaseLoggingBuilder<E>()
 
   /**
    * Defines a custom projection from the complete workflow result to public output.
@@ -56,25 +59,56 @@ class UseCaseBuilder<I : UseCaseCommand, O> internal constructor() : WorkflowCha
     setResultProjection(source.toProjection(mapper))
   }
 
+  fun logging(configure: UseCaseLoggingBuilder<E>.() -> Unit) {
+    loggingBuilder.configure()
+  }
+
   private fun setResultProjection(projection: UseCaseResultProjection<O>) {
     check(resultProjection == null) { "result() can only be called once" }
     resultProjection = projection
   }
 
-  internal fun <E> buildUseCase(
+  internal fun buildUseCase(
     name: String?,
     errorMapper: (WorkflowError) -> E
   ): UseCase<I, E, O> {
     val resultProjection = requireNotNull(resultProjection) { "useCase result projection is required" }
+    val loggingDefinition = loggingBuilder.build()
     val workflowUseCase = build(name)
     val useCaseName = workflowUseCase.name
 
     return UseCase { input, context ->
-      workflowUseCase
-        .executeProjected(input, context) { result ->
-          resultProjection.project(result, useCaseName)
+      val startTime = Instant.now()
+      logUseCaseStarted(useCaseName)
+      val detailed = workflowUseCase.executeWithoutLogging(input, context)
+      val projected =
+        Either.catch {
+          detailed.flatMap { result ->
+            resultProjection.project(result, useCaseName)
+          }
         }
-        .mapLeft(errorMapper)
+          .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
+          .flatMap { it }
+
+      val finalResult = projected.mapLeft { error ->
+        try {
+          errorMapper(error)
+        } catch (throwable: Throwable) {
+          val duration = Duration.between(startTime, Instant.now())
+          logUseCaseFinished(useCaseName, succeeded = false, duration, detailed.logMetadata())
+          throw throwable
+        }
+      }
+      val duration = Duration.between(startTime, Instant.now())
+      logUseCaseFinished(
+        useCaseName,
+        finalResult.isRight(),
+        duration,
+        detailed.logMetadata(),
+      ) {
+        loggingDefinition.fieldsFor(useCaseName, detailed, finalResult)
+      }
+      finalResult
     }
   }
 }
@@ -87,9 +121,9 @@ class UseCaseBuilder<I : UseCaseCommand, O> internal constructor() : WorkflowCha
  */
 fun <I : UseCaseCommand, O> useCase(
   name: String? = null,
-  configure: UseCaseBuilder<I, O>.() -> Unit,
+  configure: UseCaseBuilder<I, WorkflowError, O>.() -> Unit,
 ): UseCase<I, WorkflowError, O> {
-  val builder = UseCaseBuilder<I, O>()
+  val builder = UseCaseBuilder<I, WorkflowError, O>()
   builder.configure()
   return builder.buildUseCase(name) { error -> error }
 }
@@ -106,9 +140,9 @@ fun <I : UseCaseCommand, O> useCase(
 fun <I : UseCaseCommand, E, O> useCase(
   name: String? = null,
   errors: (WorkflowError) -> E,
-  configure: UseCaseBuilder<I, O>.() -> Unit,
+  configure: UseCaseBuilder<I, E, O>.() -> Unit,
 ): UseCase<I, E, O> {
-  val builder = UseCaseBuilder<I, O>()
+  val builder = UseCaseBuilder<I, E, O>()
   builder.configure()
   return builder.buildUseCase(name, errors)
 }
@@ -118,6 +152,100 @@ fun <I : UseCaseCommand, E, O> useCase(
  */
 fun interface UseCaseResultProjection<out O> {
   fun project(result: UseCaseResult<WorkflowState>, useCaseName: String): Either<WorkflowError, O>
+}
+
+class UseCaseLoggingBuilder<E> internal constructor() {
+  private val successProjections = mutableListOf<UseCaseSuccessLogProjection>()
+  private var failureProjection: UseCaseFailureLogProjection<E>? = null
+
+  fun <S : WorkflowState> success(
+    source: StateResultSource<S>,
+    fields: UseCaseLogFieldCollector.(S) -> Unit,
+  ) {
+    successProjections += source.toSuccessLogProjection(fields)
+  }
+
+  fun <Ev : Event> success(
+    source: EventResultSource<Ev>,
+    fields: UseCaseLogFieldCollector.(Ev) -> Unit,
+  ) {
+    successProjections += source.toSuccessLogProjection(fields)
+  }
+
+  fun failure(fields: UseCaseLogFieldCollector.(E) -> Unit) {
+    check(failureProjection == null) { "failure logging can only be configured once" }
+    failureProjection = UseCaseFailureLogProjection(fields)
+  }
+
+  internal fun build(): UseCaseLoggingDefinition<E> =
+    UseCaseLoggingDefinition(
+      successProjections = successProjections.toList(),
+      failureProjection = failureProjection,
+    )
+}
+
+internal data class UseCaseLoggingDefinition<E>(
+  val successProjections: List<UseCaseSuccessLogProjection>,
+  val failureProjection: UseCaseFailureLogProjection<E>?,
+)
+
+internal fun <E, O> UseCaseLoggingDefinition<E>.fieldsFor(
+  useCaseName: String,
+  detailed: Either<WorkflowError, UseCaseResult<WorkflowState>>,
+  finalResult: Either<E, O>,
+): List<UseCaseLogField> =
+  when (finalResult) {
+    is Either.Right -> detailed.fold(
+      { emptyList() },
+      { result ->
+        successProjections.flatMap { projection ->
+          projection.fields(result, useCaseName).fold(
+            { error ->
+              logUseCaseProjectionFailure(
+                useCaseName = useCaseName,
+                projection = error::class.simpleName ?: "WorkflowError",
+                error = IllegalStateException(error.logMessage),
+              )
+              emptyList()
+            },
+            { fields -> fields }
+          )
+        }
+      }
+    )
+    is Either.Left -> failureProjection?.fields(finalResult.value)?.fold(
+      { error ->
+        logUseCaseProjectionFailure(
+          useCaseName = useCaseName,
+          projection = error::class.simpleName ?: "WorkflowError",
+          error = IllegalStateException(error.logMessage),
+        )
+        emptyList()
+      },
+      { fields -> fields }
+    ).orEmpty()
+  }
+
+private val WorkflowError.logMessage: String
+  get() = when (this) {
+    is WorkflowError.ValidationError -> message
+    is WorkflowError.ExecutionError -> message
+    is WorkflowError.DomainError -> message
+    is WorkflowError.ExceptionError -> message
+    is WorkflowError.CompositionError -> message
+    is WorkflowError.ExecutionContextError -> error.logMessage
+    is WorkflowError.ChainError -> error.logMessage
+  }
+
+internal fun interface UseCaseSuccessLogProjection {
+  fun fields(result: UseCaseResult<WorkflowState>, useCaseName: String): Either<WorkflowError, List<UseCaseLogField>>
+}
+
+internal class UseCaseFailureLogProjection<E>(
+  private val collectFields: UseCaseLogFieldCollector.(E) -> Unit,
+) {
+  fun fields(error: E): Either<WorkflowError, List<UseCaseLogField>> =
+    mapLoggingFields { collectUseCaseLogFields { collectFields(error) } }
 }
 
 class StateResultSource<S : WorkflowState> @PublishedApi internal constructor(
@@ -157,6 +285,30 @@ private fun <Ev : Event, O> EventResultSource<Ev>.toProjection(
       .requireLastEvent(type, useCaseName)
       .flatMap { event -> mapProjectionOutput { mapper(event) } }
   }
+
+private fun <S : WorkflowState> StateResultSource<S>.toSuccessLogProjection(
+  fields: UseCaseLogFieldCollector.(S) -> Unit,
+): UseCaseSuccessLogProjection =
+  UseCaseSuccessLogProjection { result, useCaseName ->
+    result
+      .requireState(type, useCaseName)
+      .flatMap { state -> mapLoggingFields { collectUseCaseLogFields { fields(state) } } }
+  }
+
+private fun <Ev : Event> EventResultSource<Ev>.toSuccessLogProjection(
+  fields: UseCaseLogFieldCollector.(Ev) -> Unit,
+): UseCaseSuccessLogProjection =
+  UseCaseSuccessLogProjection { result, useCaseName ->
+    result
+      .requireLastEvent(type, useCaseName)
+      .flatMap { event -> mapLoggingFields { collectUseCaseLogFields { fields(event) } } }
+  }
+
+private fun mapLoggingFields(
+  block: () -> List<UseCaseLogField>,
+): Either<WorkflowError, List<UseCaseLogField>> =
+  Either.catch(block)
+    .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
 
 @PublishedApi
 internal fun <O> mapProjectionOutput(

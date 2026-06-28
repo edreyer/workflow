@@ -4,7 +4,6 @@ import arrow.core.Either
 import arrow.core.flatMap
 import arrow.core.raise.either
 import io.liquidsoftware.workflow.WorkflowError.ExceptionError
-import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
 import kotlin.reflect.KClass
@@ -190,49 +189,3 @@ abstract class WorkflowUseCase<C : UseCaseCommand>(
 }
 
 data object EventOnlyState : WorkflowState
-
-private val useCaseLogger = LoggerFactory.getLogger("io.liquidsoftware.workflow.UseCase")
-
-private fun logUseCaseStarted(useCaseName: String) {
-  if (useCaseLogger.isDebugEnabled) {
-    useCaseLogger.debug("UseCase invocation started name={}", useCaseName)
-  }
-}
-
-private fun logUseCaseFinished(
-  useCaseName: String,
-  succeeded: Boolean,
-  duration: Duration,
-  metadata: UseCaseLogMetadata,
-) {
-  if (!useCaseLogger.isDebugEnabled) {
-    return
-  }
-
-  useCaseLogger.debug(
-    "UseCase invocation finished name={} outcome={} durationMs={} events={} workflows={}",
-    useCaseName,
-    if (succeeded) "success" else "failure",
-    duration.toMillis(),
-    metadata.eventsCount,
-    metadata.workflowCount
-  )
-}
-
-private data class UseCaseLogMetadata(
-  val eventsCount: Int,
-  val workflowCount: Int,
-)
-
-private fun Either<WorkflowError, UseCaseResult<WorkflowState>>.logMetadata(): UseCaseLogMetadata =
-  fold(
-    { error -> UseCaseLogMetadata(eventsCount = 0, workflowCount = error.workflowExecutionCount()) },
-    { result -> UseCaseLogMetadata(eventsCount = result.events.size, workflowCount = result.context.executions.size) }
-  )
-
-private fun WorkflowError.workflowExecutionCount(): Int =
-  when (this) {
-    is WorkflowError.ExecutionContextError -> 1
-    is WorkflowError.ChainError -> error.workflowExecutionCount()
-    else -> 0
-  }
