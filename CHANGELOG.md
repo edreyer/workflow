@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-06-28
 
 - Updated Kotlin to 2.4.0.
 - Verified the build with the existing Java 25 toolchain.
