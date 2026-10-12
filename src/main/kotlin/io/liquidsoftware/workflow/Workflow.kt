@@ -1,197 +1,227 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
-import arrow.core.flatMap
+import arrow.core.raise.Raise
 import arrow.core.raise.either
-import io.liquidsoftware.workflow.WorkflowError.ExceptionError
-import java.time.Duration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import java.time.Instant
-import kotlin.reflect.KClass
+import kotlin.time.TimeSource
 
-// Base Workflow interface
-abstract class Workflow<in I : WorkflowState, out O : WorkflowState> {
+/**
+ * Marks the receivers of the workflow DSL so a nested block cannot silently call a member of an
+ * enclosing one.
+ */
+@DslMarker
+@Target(AnnotationTarget.CLASS)
+public annotation class WorkflowDsl
 
-  abstract val id: String
+/**
+ * One focused step of a use case: it turns input state [I] into output state [O].
+ *
+ * [execute] runs inside a [WorkflowStepScope], which is an Arrow [Raise] for [WorkflowError]. Fail
+ * with `ensure`, `ensureNotNull`, `raise`, or `bind()`; record events with
+ * [WorkflowStepScope.emit]; add context data with [WorkflowStepScope.put]. Thrown exceptions become
+ * [WorkflowError.ExceptionError].
+ *
+ * ```kotlin
+ * class ReserveInventory(private val inventory: Inventory) : Workflow<ValidatedOrder, ReservedOrder> {
+ *   override val id = "reserve-inventory"
+ *
+ *   override suspend fun WorkflowStepScope.execute(input: ValidatedOrder): ReservedOrder {
+ *     val reservation = ensureNotNull(inventory.reserve(input.items)) { OrderError.OutOfStock }
+ *     emit(InventoryReserved(input.orderId, reservation.id))
+ *     return ReservedOrder(input, reservation)
+ *   }
+ * }
+ * ```
+ *
+ * For a step that needs no class of its own, use the [workflow] function.
+ */
+public interface Workflow<in I, out O> {
+  /** Stable identifier used in execution history, logs, and summaries. */
+  public val id: String
 
-  /**
-   * Optional input type hint used by the DSL to avoid reflective erasure issues
-   * (wrappers like parallelJoin supply this explicitly).
-   */
-  open val inputClass: KClass<out WorkflowState>?
-    get() = WorkflowUtils.getWorkflowInputClass(this::class)
-
-  /**
-   * Name recorded in [WorkflowExecution.workflowName]. Defaults to the class name.
-   */
-  internal open val executionName: String
-    get() = this::class.simpleName ?: "UnknownWorkflow"
-
-  protected open suspend fun executeWorkflow(input: I, context: WorkflowContext): Either<WorkflowError, WorkflowResult<O>> =
-    executeWorkflow(input)
-
-  protected open suspend fun executeWorkflow(input: I): Either<WorkflowError, WorkflowResult<O>> =
-    throw IllegalStateException("Workflow ${this::class.simpleName ?: "Unknown"} must implement executeWorkflow")
-
-  suspend fun execute(input: I, context: WorkflowContext = WorkflowContext()): Either<WorkflowError, WorkflowResult<O>> {
-    val startTime = Instant.now()
-    val result = either {
-      // Either.catch handles CancellationException properly
-      Either.catch {
-        executeWorkflow(input, context).bind()
-      }.mapLeft { ex ->
-        raise(ExceptionError("An exception occurred", ex))
-      }.bind()
-    }
-    val endTime = Instant.now()
-
-    val execution = WorkflowExecution(
-      workflowName = executionName,
-      workflowId = id,
-      startTime = startTime,
-      endTime = endTime,
-      succeeded = result.isRight()
-    )
-
-    return result
-      .mapLeft { error ->
-        if (error is WorkflowError.ExecutionContextError) {
-          error
-        } else {
-          WorkflowError.ExecutionContextError(error, execution)
-        }
-      }
-      .map { it.copy(context = it.context.addExecution(execution)) }
-  }
+  public suspend fun WorkflowStepScope.execute(input: I): O
 }
 
 /**
- * Lower-level workflow-native execution model.
+ * Defines a [Workflow] from a lambda.
  *
- * Most application code should use callable [UseCase] values built with the
- * top-level `useCase` DSL. This type exists to run composed workflow chains and
- * preserve detailed state, event, and context data internally.
+ * ```kotlin
+ * val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+ *   ensure(draft.items.isNotEmpty()) { WorkflowError.ValidationError("Order has no items") }
+ *   emit(OrderValidated(draft.orderId))
+ *   ValidatedOrder(draft.orderId, draft.items)
+ * }
+ * ```
  *
- * Workflow use cases emit debug-level invocation logs through SLF4J. Logs include only
- * operational metadata such as the configured use-case name, success/failure
- * outcome, duration, event count, and workflow count. Command input, state,
- * event payloads, projected output, and error messages are intentionally not logged.
- *
- * @param configuredName Optional safe name used in invocation logs and projection errors.
+ * @param id Stable identifier used in execution history, logs, and summaries.
  */
-abstract class WorkflowUseCase<C : UseCaseCommand>(
-  private val configuredName: String? = null
+public fun <I, O> workflow(
+  id: String,
+  block: suspend WorkflowStepScope.(input: I) -> O,
+): Workflow<I, O> = LambdaWorkflow(id, block)
+
+/**
+ * Runs this workflow on its own and returns its new state, emitted events, and context.
+ *
+ * Use cases run their steps for you; call this directly to unit-test a step.
+ */
+public suspend operator fun <I, O> Workflow<I, O>.invoke(
+  input: I,
+  context: WorkflowContext = WorkflowContext(),
+): Either<WorkflowError, WorkflowResult<O>> = runStep(input, context, ExecutionRecorder())
+
+/**
+ * Receiver of [Workflow.execute] and [workflow] blocks.
+ *
+ * Besides raising [WorkflowError]s, a step can read the [context], [emit] domain events, and [put]
+ * typed data into the context seen by later steps. These methods are safe to call from coroutines
+ * launched inside the step.
+ */
+@WorkflowDsl
+public class WorkflowStepScope internal constructor(
+  raise: Raise<WorkflowError>,
+  context: WorkflowContext,
+  internal val recorder: ExecutionRecorder,
+) : Raise<WorkflowError> by raise {
+  private val lock = Any()
+  private val events = mutableListOf<Event>()
+  private var currentContext = context
+
+  /** The context as the previous steps left it, plus anything this step has [put]. */
+  public val context: WorkflowContext
+    get() = synchronized(lock) { currentContext }
+
+  /** Records a domain event emitted by this step. */
+  public fun emit(event: Event) {
+    synchronized(lock) { events += event }
+  }
+
+  /** Adds typed data to the context seen by later steps. */
+  public fun <T : Any> put(key: Key<T>, value: T) {
+    synchronized(lock) { currentContext = currentContext.with(key, value) }
+  }
+
+  /** Merges the events and context of a nested step run into this one. */
+  internal fun absorb(result: WorkflowResult<*>) {
+    synchronized(lock) {
+      events += result.events
+      currentContext += result.context
+    }
+  }
+
+  internal fun <O> toResult(state: O): WorkflowResult<O> =
+    synchronized(lock) { WorkflowResult(state, events.toList(), currentContext) }
+}
+
+private class LambdaWorkflow<I, O>(
+  override val id: String,
+  private val block: suspend WorkflowStepScope.(I) -> O,
+) : Workflow<I, O> {
+  override suspend fun WorkflowStepScope.execute(input: I): O = block(input)
+}
+
+/**
+ * Collects the [WorkflowExecution]s of one use case run, including nested and launched steps, and
+ * remembers which step raised each error.
+ *
+ * Parallel branches get child recorders so the step behind the error a join selects can be
+ * attributed even when several branches fail, or fail with the same error instance.
+ */
+internal class ExecutionRecorder private constructor(
+  private val parent: ExecutionRecorder?,
+  private val launched: Boolean,
 ) {
-  /**
-   * Safe operational name for this use case.
-   */
-  val name: String
-    get() = configuredName ?: this::class.simpleName ?: "UseCase"
+  constructor() : this(null, false)
 
-  /**
-   * Implements the use case. Subclasses provide behavior here so public execution methods
-   * can consistently apply cross-cutting behavior such as safe invocation logging.
-   */
-  protected abstract suspend fun executeUseCase(
-    command: C,
-    context: WorkflowContext
-  ): Either<WorkflowError, UseCaseResult<WorkflowState>>
+  private val root: ExecutionRecorder = parent?.root ?: this
+  private val executions = mutableListOf<WorkflowExecution>()
+  private val failedStepIds = java.util.IdentityHashMap<WorkflowError, String>()
 
-  internal suspend fun executeWithoutLogging(
-    command: C,
-    context: WorkflowContext
-  ): Either<WorkflowError, UseCaseResult<WorkflowState>> =
-    executeUseCase(command, context)
+  /** A recorder for launched side effects: their executions are kept, but never count as the failing step. */
+  fun forLaunched(): ExecutionRecorder = ExecutionRecorder(this, launched = true)
 
-  /**
-   * Executes the use case and returns a detailed [UseCaseResult] containing the final state,
-   * all emitted events, and the full execution context.
-   *
-   * @param command The input command for the use case.
-   * @param context An optional initial [WorkflowContext] (e.g., containing correlation IDs).
-   *
-   * Emits debug logs before and after execution without logging command, state, or event payload data.
-   */
-  suspend fun executeDetailed(
-    command: C,
-    context: WorkflowContext = WorkflowContext()
-  ): Either<WorkflowError, UseCaseResult<WorkflowState>> {
-    val startTime = Instant.now()
-    logUseCaseStarted(name)
-    val result = executeUseCase(command, context)
-    val duration = Duration.between(startTime, Instant.now())
-    logUseCaseFinished(name, result.isRight(), duration, result.logMetadata())
-    return result
+  /** A recorder for one parallel branch. */
+  fun forBranch(): ExecutionRecorder = ExecutionRecorder(this, launched)
+
+  fun record(execution: WorkflowExecution, error: WorkflowError?) {
+    synchronized(root) {
+      root.executions += execution
+      // The innermost step records an error first; enclosing steps that pass it on keep that id.
+      if (!launched && error != null) forEachLevel { it.failedStepIds.putIfAbsent(error, execution.workflowId) }
+    }
   }
 
-  /**
-   * Executes the use case and returns only the emitted events.
-   */
-  suspend fun execute(command: C): Either<WorkflowError, UseCaseEvents> {
-    val startTime = Instant.now()
-    logUseCaseStarted(name)
-    val detailed = executeUseCase(command, WorkflowContext())
-    val result = detailed.map { it.toUseCaseEvents() }
-    val duration = Duration.between(startTime, Instant.now())
-    logUseCaseFinished(name, result.isRight(), duration, detailed.logMetadata())
-    return result
+  /** Marks [stepId] as the step behind [error], replacing what completion order recorded. */
+  fun attribute(error: WorkflowError, stepId: String?) {
+    if (launched || stepId == null) return
+    synchronized(root) { forEachLevel { it.failedStepIds[error] = stepId } }
   }
 
-  /**
-   * Executes the use case and applies a [projector] function to the result.
-   * Use this for custom transformations where the output is a hybrid of state, events, and context.
-   *
-   * @param command The input command for the use case.
-   * @param context An optional initial [WorkflowContext].
-   * @param projector A lambda that transforms [UseCaseResult] into your desired output type [O].
-   */
-  suspend fun <O> executeProjected(
-    command: C,
-    context: WorkflowContext = WorkflowContext(),
-    projector: (UseCaseResult<WorkflowState>) -> Either<WorkflowError, O>
-  ): Either<WorkflowError, O> {
-    val startTime = Instant.now()
-    logUseCaseStarted(name)
-    val detailed = executeUseCase(command, context)
-    val result =
-      Either.catch { detailed.flatMap(projector) }
-        .mapLeft { WorkflowError.ExceptionError("An exception occurred", it) }
-        .flatMap { it }
-    val duration = Duration.between(startTime, Instant.now())
-    logUseCaseFinished(name, result.isRight(), duration, detailed.logMetadata())
-    return result
-  }
+  fun snapshot(): List<WorkflowExecution> = synchronized(root) { root.executions.toList() }
 
-  /**
-   * Executes the use case and returns the last emitted event of type [E].
-   * Useful for controllers that need to return specific data contained within a domain event.
-   *
-   * @param command The input command for the use case.
-   * @param context An optional initial [WorkflowContext].
-   * @return [Either.Right] with the last event of type [E], or [Either.Left] with [WorkflowError.CompositionError]
-   * if an event of type [E] was not emitted.
-   */
-  suspend inline fun <reified E : Event> executeForEvent(
-    command: C,
-    context: WorkflowContext = WorkflowContext()
-  ): Either<WorkflowError, E> {
-    return executeProjected(command, context) { it.requireLastEvent(name) }
-  }
+  /** The id of the main-pipeline step that raised [error], or `null` if no step raised it. */
+  fun failedStepId(error: WorkflowError): String? = synchronized(root) { failedStepIds[error] }
 
-  /**
-   * Executes the use case and returns the final state cast to [S].
-   * Useful when the caller needs the complete final domain state after all transformations.
-   *
-   * @param command The input command for the use case.
-   * @param context An optional initial [WorkflowContext].
-   * @return [Either.Right] with the final state cast to [S], or [Either.Left] with [WorkflowError.CompositionError]
-   * if the final state is not of type [S].
-   */
-  suspend inline fun <reified S : WorkflowState> executeForState(
-    command: C,
-    context: WorkflowContext = WorkflowContext()
-  ): Either<WorkflowError, S> {
-    return executeProjected(command, context) { it.requireState(name) }
+  private inline fun forEachLevel(action: (ExecutionRecorder) -> Unit) {
+    var level: ExecutionRecorder? = this
+    while (level != null) {
+      action(level)
+      level = level.parent
+    }
   }
 }
 
-data object EventOnlyState : WorkflowState
+internal val Workflow<*, *>.executionName: String
+  get() = if (this is LambdaWorkflow) id else this::class.simpleName ?: id
+
+/**
+ * Runs this step, records its execution, and returns its result. When the step fails,
+ * [onFailure] receives the events and context it collected before failing.
+ */
+internal suspend fun <I, O> Workflow<I, O>.runStep(
+  input: I,
+  context: WorkflowContext,
+  recorder: ExecutionRecorder,
+  onFailure: ((WorkflowResult<Nothing?>) -> Unit)? = null,
+): Either<WorkflowError, WorkflowResult<O>> {
+  val startTime = Instant.now()
+  val mark = TimeSource.Monotonic.markNow()
+  var scope: WorkflowStepScope? = null
+  val result: Either<WorkflowError, WorkflowResult<O>> = try {
+    either<WorkflowError, WorkflowResult<O>> {
+      val stepScope = WorkflowStepScope(this, context, recorder).also { scope = it }
+      val state = catchingExceptions { stepScope.execute(input) }
+      stepScope.toResult(state)
+    }
+  } catch (ex: CancellationException) {
+    // A timeout the step started itself (its own withTimeout) is a failure of the step. Cancellation
+    // of this coroutine, including a caller's timeout, keeps propagating.
+    if (!currentCoroutineContext().isActive) throw ex
+    Either.Left(WorkflowError.ExceptionError("An exception occurred", ex))
+  }
+  val duration = mark.elapsedNow()
+  recorder.record(
+    WorkflowExecution(
+      workflowName = executionName,
+      workflowId = id,
+      startTime = startTime,
+      endTime = startTime.plusNanos(duration.inWholeNanoseconds),
+      duration = duration,
+      succeeded = result.isRight(),
+    ),
+    result.leftOrNull(),
+  )
+  if (result.isLeft() && onFailure != null) scope?.let { onFailure(it.toResult(null)) }
+  return result
+}
+
+/**
+ * Runs [block], turning non-fatal exceptions into [WorkflowError.ExceptionError]. Raised errors and
+ * cancellation pass through.
+ */
+internal inline fun <A> Raise<WorkflowError>.catchingExceptions(block: () -> A): A =
+  arrow.core.raise.catch(block) { ex -> raise(WorkflowError.ExceptionError("An exception occurred", ex)) }

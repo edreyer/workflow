@@ -1,201 +1,93 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
-import arrow.core.raise.either
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import java.time.Instant
-import java.util.UUID
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class ParallelJoinTest {
-  data class JoinState(val value: String) : WorkflowState
-  data class AlphaState(val value: String, val alpha: String) : WorkflowState
-  data class BetaState(val value: String, val beta: String) : WorkflowState
-  data class MergedState(val value: String, val alpha: String, val beta: String) : WorkflowState
 
-  data class AlphaEvent(
-    override val id: UUID,
-    override val timestamp: Instant,
-    val label: String
-  ) : Event
+  data class Order(val id: String, val amount: Int)
+  data class Subtotal(val amount: Int)
+  data class Tax(val amount: Int)
+  data class Priced(val id: String, val subtotal: Int, val tax: Int)
+  data class Computed(val name: String) : BaseEvent()
 
-  data class BetaEvent(
-    override val id: UUID,
-    override val timestamp: Instant,
-    val label: String
-  ) : Event
-
-  data class ExtraEvent(
-    override val id: UUID,
-    override val timestamp: Instant,
-    val label: String
-  ) : Event
-
-  class ConsumingWorkflow(
-    override val id: String,
-    private val eventLabel: String
-  ) : Workflow<MergedState, JoinState>() {
-    override suspend fun executeWorkflow(input: MergedState): Either<WorkflowError, WorkflowResult<JoinState>> = either {
-      WorkflowResult(
-        JoinState("${input.alpha}-${input.beta}"),
-        listOf(ExtraEvent(UUID.randomUUID(), Instant.EPOCH, eventLabel))
-      )
-    }
+  private val subtotal = workflow<Order, Subtotal>("subtotal") { order ->
+    delay(20)
+    emit(Computed("subtotal"))
+    Subtotal(order.amount)
   }
 
-  data class JoinCommand(val value: String) : UseCaseCommand
-
-  class EmittingWorkflow<S : WorkflowState>(
-    override val id: String,
-    private val delayMs: Long = 0L,
-    private val events: List<Event> = emptyList(),
-    private val stateFactory: (JoinState) -> S
-  ) : Workflow<JoinState, S>() {
-    override suspend fun executeWorkflow(input: JoinState): Either<WorkflowError, WorkflowResult<S>> {
-      if (delayMs > 0) {
-        delay(delayMs)
-      }
-      return Either.Right(WorkflowResult(stateFactory(input), events))
-    }
-  }
-
-  class FailingWorkflow<S : WorkflowState>(
-    override val id: String,
-    private val delayMs: Long = 0L
-  ) : Workflow<JoinState, S>() {
-    override suspend fun executeWorkflow(input: JoinState): Either<WorkflowError, WorkflowResult<S>> {
-      if (delayMs > 0) {
-        delay(delayMs)
-      }
-      return Either.Left(WorkflowError.ExecutionError("Failure: $id"))
-    }
+  private val tax = workflow<Order, Tax>("tax") { order ->
+    emit(Computed("tax"))
+    Tax(order.amount / 10)
   }
 
   @Test
-  fun `parallelJoin merges states and events in parameter order`() {
-    val alpha = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
-    val extra = ExtraEvent(UUID.randomUUID(), Instant.EPOCH, "extra")
-    val beta = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
+  fun `merges branch outputs and keeps events in parameter order`() = runTest {
+    val join = parallelJoin(subtotal, tax) { s, t -> Priced("o-1", s.amount, t.amount) }
 
-    val alphaWorkflow = EmittingWorkflow(
-      id = "alpha",
-      events = listOf(alpha, extra)
-    ) { input -> AlphaState(input.value, "alpha") }
-    val betaWorkflow = EmittingWorkflow(
-      id = "beta",
-      events = listOf(beta)
-    ) { input -> BetaState(input.value, "beta") }
+    val result = assertIs<Either.Right<WorkflowResult<Priced>>>(join(Order("o-1", 100))).value
 
-    val join = parallelJoin(alphaWorkflow, betaWorkflow) { a, b ->
-      MergedState(a.value, a.alpha, b.beta)
-    }
-
-    val result = runBlocking { join.execute(JoinState("ok")) }
-
-    assertTrue(result is Either.Right)
-    val right = result.value
-    assertEquals(MergedState("ok", "alpha", "beta"), right.state)
-    assertEquals(listOf(alpha, extra, beta), right.events)
-    val executions = right.context.executions.map { it.workflowId }
-    assertEquals(listOf("alpha", "beta", join.id), executions)
+    assertEquals(Priced("o-1", 100, 10), result.state)
+    assertEquals(listOf("subtotal", "tax"), result.events.filterIsInstance<Computed>().map { it.name })
   }
 
   @Test
-  fun `parallelJoin returns first error by parameter order in WaitAll`() {
-    val slowFailure = FailingWorkflow<AlphaState>("first", delayMs = 200L)
-    val fastFailure = FailingWorkflow<BetaState>("second", delayMs = 0L)
-
-    val join = parallelJoin(slowFailure, fastFailure) { _, _ ->
-      MergedState("unused", "unused", "unused")
+  fun `WaitAll returns the first error by parameter order`() = runTest {
+    val slowFailure = workflow<Order, Subtotal>("slow-failure") {
+      delay(50)
+      raise(WorkflowError.ExecutionError("first"))
     }
+    val fastFailure = workflow<Order, Tax>("fast-failure") { raise(WorkflowError.ExecutionError("second")) }
 
-    val result = runBlocking { join.execute(JoinState("ok")) }
+    val result = parallelJoin(slowFailure, fastFailure) { _, _ -> Unit }(Order("o", 1))
 
-    assertTrue(result is Either.Left)
-    val error = result.value as WorkflowError.ExecutionContextError
-    assertEquals("first", error.execution.workflowId)
-    assertTrue(error.error !is WorkflowError.ExecutionContextError)
+    assertEquals(Either.Left(WorkflowError.ExecutionError("first")), result)
   }
 
   @Test
-  fun `parallelJoin fail-fast cancels slow branch`() {
-    val fastFailure = FailingWorkflow<AlphaState>("first", delayMs = 50L)
-    val slowWorkflow = EmittingWorkflow(
-      id = "second",
-      delayMs = 2000L,
-      events = listOf(BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta"))
-    ) { input -> BetaState(input.value, "beta") }
-
-    val join = parallelJoin(fastFailure, slowWorkflow, ParallelErrorPolicy.FailFast) { _, _ ->
-      MergedState("unused", "unused", "unused")
-    }
-
-    val start = System.currentTimeMillis()
-    val result = runBlocking { join.execute(JoinState("ok")) }
-    val elapsed = System.currentTimeMillis() - start
-
-    assertTrue(result is Either.Left)
-    assertTrue(elapsed < 1000L)
-  }
-
-  @Test
-  fun `parallelJoin works inside useCase with inferred input type`() {
-    val alphaEvent = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
-    val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
-
-    val joinUseCase = workflowUseCase<JoinCommand> {
-      startWith { command -> Either.Right(JoinState(command.value)) }
-      parallelJoin(
-        EmittingWorkflow(
-          id = "alpha",
-          events = listOf(alphaEvent)
-        ) { input -> AlphaState(input.value, "alpha") },
-        EmittingWorkflow(
-          id = "beta",
-          events = listOf(betaEvent)
-        ) { input -> BetaState(input.value, "beta") }
-      ) { a, b ->
-        MergedState(a.value, a.alpha, b.beta)
+  fun `FailFast cancels the remaining branches`() = runTest {
+    var slowFinished = false
+    val slow = workflow<Order, Subtotal>("slow") {
+      try {
+        awaitCancellation()
+      } finally {
+        slowFinished = true
       }
     }
+    val failing = workflow<Order, Tax>("failing") { raise(WorkflowError.ExecutionError("boom")) }
 
-    val result = runBlocking { joinUseCase.execute(JoinCommand("ok")) }
+    val result = parallelJoin(slow, failing, ParallelErrorPolicy.FailFast) { _, _ -> Unit }(Order("o", 1))
 
-    assertTrue(result is Either.Right)
-    assertEquals(listOf(alphaEvent, betaEvent), result.value.events)
+    assertEquals(Either.Left(WorkflowError.ExecutionError("boom")), result)
+    assertTrue(slowFinished)
   }
 
   @Test
-  fun `top-level parallelJoin feeds subsequent workflow`() {
-    val alphaEvent = AlphaEvent(UUID.randomUUID(), Instant.EPOCH, "alpha")
-    val betaEvent = BetaEvent(UUID.randomUUID(), Instant.EPOCH, "beta")
-
-    val useCase = workflowUseCase<JoinCommand> {
-      startWith { command -> Either.Right(JoinState(command.value)) }
-      parallelJoin(
-        EmittingWorkflow(
-          id = "alpha",
-          events = listOf(alphaEvent)
-        ) { input -> AlphaState(input.value, "alpha") },
-        EmittingWorkflow(
-          id = "beta",
-          events = listOf(betaEvent)
-        ) { input -> BetaState(input.value, "beta") }
-      ) { a, b ->
-        MergedState(a.value, a.alpha, b.beta)
-      }
-      then(ConsumingWorkflow("consume", "joined"))
+  fun `parallelJoin in a pipeline is type checked against the current state`() = runTest {
+    val useCase: UseCase<Order, WorkflowError, Int> = useCase {
+      startWith { it }
+        .parallelJoin(subtotal, tax) { s, t -> s.amount + t.amount }
+        .then(workflow<Int, Int>("double") { it * 2 })
+        .result { it }
     }
 
-    val result = runBlocking { useCase.execute(JoinCommand("ok")) }
+    assertEquals(Either.Right(220), useCase(Order("o-1", 100)))
+  }
 
-    assertTrue(result is Either.Right)
-    val events = result.value.events
-    assertEquals(3, events.size)
-    assertTrue(events.containsAll(listOf(alphaEvent, betaEvent)))
-    assertTrue(events.any { it is ExtraEvent && it.label == "joined" })
+  @Test
+  fun `supports eight branches`() = runTest {
+    fun n(value: Int) = workflow<Int, Int>("n$value") { it + value }
+    val join = parallelJoin(n(1), n(2), n(3), n(4), n(5), n(6), n(7), n(8)) { a, b, c, d, e, f, g, h ->
+      listOf(a, b, c, d, e, f, g, h)
+    }
+
+    assertEquals((11..18).toList(), join(10).getOrNull()?.state)
   }
 }

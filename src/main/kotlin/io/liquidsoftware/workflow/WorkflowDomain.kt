@@ -1,265 +1,199 @@
 package io.liquidsoftware.workflow
 
-import arrow.core.Either
 import java.time.Instant
 import java.util.UUID
-import kotlin.reflect.KClass
-import kotlin.reflect.KProperty1
+import kotlin.time.Duration
 
-interface WorkflowState
-
-interface UseCaseCommand
-
-interface Event {
-  val id: UUID
-  val timestamp: Instant
+/**
+ * A domain fact emitted while a use case runs.
+ */
+public interface Event {
+  public val id: UUID
+  public val timestamp: Instant
 }
 
 /**
- * Type-safe property key that contains both name and type information.
- * Used for storing and retrieving data in [WorkflowContext].
- *
- * @param T The type of the value associated with this key.
- * @property id The string identifier for the key.
- * @property type The KClass representing the type of the value.
+ * Convenience base type for events with a generated [id] and [timestamp].
  */
-data class Key<T : Any>(
-  val id: String,
-  val type: KClass<T>
-) {
-  companion object {
-    /**
-     * Creates a typed key with reified type parameter
-     */
-    inline fun <reified T : Any> of(id: String): Key<T> = Key(id, T::class)
-
-    /**
-     * Creates a typed key for common types with convenience methods
-     */
-    fun string(id: String): Key<String> = Key(id, String::class)
-    fun uuid(id: String): Key<UUID> = Key(id, UUID::class)
-    fun double(id: String): Key<Double> = Key(id, Double::class)
-    fun int(id: String): Key<Int> = Key(id, Int::class)
-    fun boolean(id: String): Key<Boolean> = Key(id, Boolean::class)
-    fun long(id: String): Key<Long> = Key(id, Long::class)
-  }
-}
-
-/**
- * Common extension functions for a list of events.
- */
-inline fun <reified T : Event, R> List<Event>.getFromEvent(property: KProperty1<T, R>): R? =
-  filterIsInstance<T>().firstOrNull()?.let { property.get(it) }
-
-inline fun <reified T : Event> List<Event>.lastEvent(): T? =
-  filterIsInstance<T>().lastOrNull()
-
-abstract class BaseEvent(
+public abstract class BaseEvent(
   final override val id: UUID = UUID.randomUUID(),
   final override val timestamp: Instant = Instant.now(),
 ) : Event
 
-data class UseCaseEvents(val events: List<Event>)
+/**
+ * Returns the last event of type [T], or `null` when none was emitted.
+ */
+public inline fun <reified T : Event> List<Event>.lastEvent(): T? =
+  lastOrNull { it is T } as T?
 
-data class UseCaseResult<out S : WorkflowState>(
-  val state: S,
-  val events: List<Event>,
-  val context: WorkflowContext = WorkflowContext()
-) {
-  inline fun <reified T : Event, R> getFromEvent(property: KProperty1<T, R>): R? =
-    events.getFromEvent(property)
+/**
+ * Identifies a typed value stored in a [WorkflowContext].
+ *
+ * Keys compare by identity, so declare each key once and share it:
+ *
+ * ```kotlin
+ * object Keys {
+ *   val TENANT = Key<TenantId>("tenant")
+ *   val FLAGS = Key<Set<String>>("flags")
+ * }
+ * ```
+ *
+ * Because the value type lives in the type parameter rather than in a `KClass`, generic types such
+ * as `List<String>` keep their full type.
+ *
+ * @property name Diagnostic name, used in `toString` only.
+ */
+public class Key<T : Any>(public val name: String) {
+  /**
+   * Pairs this key with a value of its type, for [WorkflowContext.of]. As a member it takes
+   * precedence over the standard `to`, so a value of the wrong type does not compile.
+   */
+  public infix fun to(value: T): Entry<T> = Entry(this, value)
 
-  inline fun <reified T : Event> lastEvent(): T? =
-    events.lastEvent()
+  override fun toString(): String = "Key($name)"
 
-  inline fun <reified T : Event> requireLastEvent(useCaseName: String = "UseCase"): Either<WorkflowError, T> =
-    requireLastEvent(T::class, useCaseName)
-
-  fun <T : Event> requireLastEvent(type: KClass<T>, useCaseName: String = "UseCase"): Either<WorkflowError, T> {
-    val lastEvent = events.lastOrNull { event -> type.isInstance(event) }
-    return if (lastEvent != null) {
-      @Suppress("UNCHECKED_CAST")
-      Either.Right(lastEvent as T)
-    } else {
-      Either.Left(
-        WorkflowError.CompositionError(
-          "Use case $useCaseName did not emit expected event ${type.simpleName}",
-          IllegalStateException("Missing expected event ${type.simpleName}")
-        )
-      )
-    }
-  }
-
-  inline fun <reified T : WorkflowState> requireState(useCaseName: String = "UseCase"): Either<WorkflowError, T> =
-    requireState(T::class, useCaseName)
-
-  fun <T : WorkflowState> requireState(type: KClass<T>, useCaseName: String = "UseCase"): Either<WorkflowError, T> {
-    val currentState = state
-    return if (type.isInstance(currentState)) {
-      @Suppress("UNCHECKED_CAST")
-      Either.Right(currentState as T)
-    } else {
-      Either.Left(
-        WorkflowError.CompositionError(
-          "Use case $useCaseName ended with state ${currentState::class.simpleName} instead of expected state ${type.simpleName}",
-          IllegalStateException("Unexpected final state ${currentState::class.simpleName}")
-        )
-      )
-    }
-  }
-
-  fun toUseCaseEvents(): UseCaseEvents = UseCaseEvents(events)
-}
-
-sealed class WorkflowError {
-  data class ValidationError(val message: String) : WorkflowError()
-  data class ExecutionError(val message: String) : WorkflowError()
-  data class DomainError(
-    val code: String,
-    val message: String,
-    val metadata: Map<String, String> = emptyMap()
-  ) : WorkflowError()
-  data class ExceptionError(val message: String, val ex: Throwable) : WorkflowError()
-  data class CompositionError(val message: String, val ex: Throwable) : WorkflowError()
-  data class ExecutionContextError(val error: WorkflowError, val execution: WorkflowExecution) : WorkflowError()
-  data class ChainError(val error: WorkflowError) : WorkflowError()
+  /** A key and a value of its type. */
+  public class Entry<T : Any> internal constructor(public val key: Key<T>, public val value: T)
 }
 
 /**
- * Returns the error a workflow step actually raised, without the library's bookkeeping wrappers.
- *
- * Every failing step is reported as [WorkflowError.ExecutionContextError] so callers can see which
- * workflow failed. That wrapper also reaches the `errors` mapper of `useCase`, which makes a plain
- * `when (error) { is DomainError -> ... }` silently fall through. Match on `rootCause()` instead:
- *
- * ```kotlin
- * useCase(name = "PlaceOrder", errors = { error ->
- *   when (val cause = error.rootCause()) {
- *     is WorkflowError.DomainError -> ApplicationError(cause.code)
- *     else -> ApplicationError("unexpected")
- *   }
- * }) { ... }
- * ```
+ * Immutable, typed metadata that flows through a use case, such as a correlation ID or feature
+ * flags. Steps read it through [WorkflowStepScope.context] and add to it with [WorkflowStepScope.put].
  */
-tailrec fun WorkflowError.rootCause(): WorkflowError =
-  when (this) {
-    is WorkflowError.ExecutionContextError -> error.rootCause()
-    is WorkflowError.ChainError -> error.rootCause()
-    else -> this
-  }
-
-data class WorkflowResult<out S : WorkflowState>(
-  val state: S,
-  val events: List<Event> = emptyList(),
-  val context: WorkflowContext = WorkflowContext()
+public class WorkflowContext private constructor(
+  private val data: Map<Key<*>, Any>,
 ) {
+  public constructor() : this(emptyMap())
 
-  inline fun <reified T : Event, R> getFromEvent(property: KProperty1<T, R>): R? =
-    events.getFromEvent(property)
+  /** Returns the value stored for [key], or `null`. */
+  @Suppress("UNCHECKED_CAST")
+  public operator fun <T : Any> get(key: Key<T>): T? = data[key] as T?
 
-  fun mergePrevious(previous: WorkflowResult<WorkflowState>): WorkflowResult<S> {
-    val combinedContext = previous.context.combine(context)
-    val combinedEvents = previous.events + events
-    return WorkflowResult(state, combinedEvents, combinedContext)
+  /** Returns `true` when a value is stored for [key]. */
+  public operator fun contains(key: Key<*>): Boolean = key in data
+
+  /** Returns a copy with [key] set to [value]. */
+  public fun <T : Any> with(key: Key<T>, value: T): WorkflowContext = WorkflowContext(data + Pair(key, value))
+
+  /** Returns a copy with every entry of [other] added; [other] wins on conflicts. */
+  public operator fun plus(other: WorkflowContext): WorkflowContext =
+    if (other.data.isEmpty()) this else WorkflowContext(data + other.data)
+
+  /**
+   * The entries that differ from [base]. Merging only these keeps a stale copy of an untouched key
+   * from overwriting a newer value.
+   */
+  internal fun changesSince(base: WorkflowContext): WorkflowContext =
+    if (this === base) WorkflowContext() else WorkflowContext(data.filter { (key, value) -> base.data[key] != value })
+
+  override fun equals(other: Any?): Boolean = other is WorkflowContext && other.data == data
+  override fun hashCode(): Int = data.hashCode()
+  override fun toString(): String = "WorkflowContext(keys=${data.keys})"
+
+  public companion object {
+    /** Correlation ID for logs and summaries. */
+    public val CORRELATION_ID: Key<String> = Key("correlationId")
+
+    /** Messages for launched side effects that failed or timed out. */
+    public val LAUNCHED_FAILURES: Key<List<String>> = Key("launchedFailures")
+
+    /** Builds a context from typed entries, written `key to value`. */
+    public fun of(vararg entries: Key.Entry<*>): WorkflowContext =
+      WorkflowContext(entries.associate { Pair(it.key, it.value) })
   }
-
-  fun toUseCaseResult(): UseCaseResult<S> = UseCaseResult(
-    state = state,
-    events = events,
-    context = context
-  )
 }
 
-data class WorkflowExecution(
+/**
+ * The outcome of running a workflow step on its own: the new state, the events the step emitted,
+ * and the context it produced.
+ */
+public data class WorkflowResult<out S>(
+  val state: S,
+  val events: List<Event> = emptyList(),
+  val context: WorkflowContext = WorkflowContext(),
+)
+
+/** This result with only the context entries that differ from [base]. */
+internal fun <S> WorkflowResult<S>.changesSince(base: WorkflowContext): WorkflowResult<S> =
+  copy(context = context.changesSince(base))
+
+/**
+ * One workflow step run, recorded for logging and [UseCaseSummary].
+ *
+ * @property duration Measured with a monotonic clock; [startTime] and [endTime] are wall-clock
+ * timestamps for display only.
+ */
+public data class WorkflowExecution(
   val workflowName: String,
   val workflowId: String,
   val startTime: Instant,
   val endTime: Instant,
-  val succeeded: Boolean
+  val duration: Duration,
+  val succeeded: Boolean,
 )
 
 /**
- * A container for metadata and execution history that flows through a workflow chain.
+ * A failure raised by a workflow step, `startWith`, or a result projection.
  *
- * @property data A map of additional data, ideally accessed via type-safe [Key]s.
- * @property executions A list of all workflows executed within the current use case.
+ * The library's own errors are nested here. Applications can also implement this interface with
+ * their own sealed error types and raise them directly from steps; they reach the `errors` mapper
+ * of `useCase` unchanged.
+ *
+ * ```kotlin
+ * sealed interface OrderError : WorkflowError {
+ *   data object OutOfStock : OrderError
+ *   data class PaymentDeclined(val reason: String) : OrderError
+ * }
+ * ```
  */
-data class WorkflowContext(
-  val data: Map<String, Any> = emptyMap(),
-  val executions: List<WorkflowExecution> = emptyList()
-) {
+public interface WorkflowError {
   /**
-   * Adds data to the context using a typed key.
+   * Stable, non-sensitive identifier used in logs and summaries. Defaults to the class name.
    */
-  fun <T : Any> addData(key: Key<T>, value: T): WorkflowContext {
-    val newData = data + (key.id to value)
-    return copy(data = newData)
-  }
+  public val code: String
+    get() = this::class.simpleName ?: "WorkflowError"
 
   /**
-   * Legacy method to add data using a string key.
+   * Human-readable description. It may contain user data, so summaries redact it unless asked not to.
    */
-  fun addData(key: String, value: Any): WorkflowContext {
-    val newData = data + (key to value)
-    return copy(data = newData)
-  }
+  public val message: String
+    get() = code
 
-  /**
-   * Retrieves typed data from context using a typed key.
-   * @return The value if present and matches the key's type, otherwise null.
-   */
-  @Suppress("UNCHECKED_CAST")
-  fun <T : Any> get(key: Key<T>): T? {
-    val value = data[key.id]
-    return if (key.type.isInstance(value)) value as T else null
-  }
+  /** Input that failed validation. */
+  public data class ValidationError(override val message: String) : WorkflowError
 
-  /**
-   * Legacy method to retrieve typed data from context using a string key and reified type.
-   * @return The value if present and matches type T, otherwise the default value.
-   */
-  inline fun <reified T> getTypedData(key: String, default: T? = null): T? {
-    val value = data[key]
-    return if (value is T) value else default
-  }
+  /** A step could not complete. */
+  public data class ExecutionError(override val message: String) : WorkflowError
 
-  fun combine(other: WorkflowContext): WorkflowContext {
-    val combinedData = data + other.data
-    val combinedExecutions = mergeExecutions(executions, other.executions)
-    return copy(data = combinedData, executions = combinedExecutions)
-  }
+  /** A business rule failed. Prefer your own [WorkflowError] types when you need structure. */
+  public data class DomainError(
+    override val code: String,
+    override val message: String,
+    val metadata: Map<String, String> = emptyMap(),
+  ) : WorkflowError
 
-  fun addExecution(execution: WorkflowExecution): WorkflowContext {
-    val newExecutions = executions + execution
-    return copy(executions = newExecutions)
-  }
+  /** A step, `startWith`, or projection threw. */
+  public data class ExceptionError(override val message: String, val ex: Throwable) : WorkflowError
 
-  companion object {
-    val CORRELATION_ID = Key.string("correlationId")
-    val LAUNCHED_FAILURES = Key.of<List<String>>("launchedFailures")
-  }
+  /** The use case was assembled in a way that cannot run, such as a missing expected event. */
+  public data class CompositionError(override val message: String) : WorkflowError
 }
 
-private fun mergeExecutions(
-  current: List<WorkflowExecution>,
-  incoming: List<WorkflowExecution>
-): List<WorkflowExecution> {
-  if (current.isEmpty()) {
-    return incoming
-  }
-  if (incoming.isEmpty()) {
-    return current
-  }
+/**
+ * Kept so 0.8.x error mappers still compile. Step errors are no longer wrapped, so this returns
+ * the error unchanged.
+ */
+@Deprecated("Step errors are no longer wrapped. Use the error directly.", ReplaceWith("this"))
+public fun WorkflowError.rootCause(): WorkflowError = this
 
-  val commonPrefixLength = current.zip(incoming)
-    .takeWhile { (left, right) -> left == right }
-    .count()
+/**
+ * Former marker for workflow state. Any type can now be workflow state.
+ */
+@Deprecated("Any type can be workflow state. Remove this supertype.")
+public interface WorkflowState
 
-  return if (commonPrefixLength == 0) {
-    current + incoming
-  } else {
-    current.take(commonPrefixLength) +
-      current.drop(commonPrefixLength) +
-      incoming.drop(commonPrefixLength)
-  }
-}
+/**
+ * Former marker for use case input. Any type can now be use case input.
+ */
+@Deprecated("Any type can be use case input. Remove this supertype.")
+public interface UseCaseCommand

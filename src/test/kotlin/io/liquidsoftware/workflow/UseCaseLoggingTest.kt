@@ -5,85 +5,52 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
-import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.Test
+import kotlinx.coroutines.test.runTest
 import org.slf4j.LoggerFactory
-import java.time.Instant
-import java.util.UUID
+import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class UseCaseLoggingTest {
 
-  data class LoggingCommand(val patientName: String) : UseCaseCommand
-  data class LoggingState(val patientName: String) : WorkflowState
-  data class LoggingEvent(
-    override val id: UUID,
-    override val timestamp: Instant,
-    val patientName: String,
-  ) : Event
+  data class RegisterPatient(val patientName: String)
+  data class Patient(val patientName: String)
+  data class PatientRegistered(val patientName: String) : BaseEvent()
+  data class PatientError(val reason: String, val retryable: Boolean)
 
-  class LoggingWorkflow : Workflow<LoggingState, LoggingState>() {
-    override val id: String = "logging-workflow"
-
-    override suspend fun executeWorkflow(
-      input: LoggingState,
-      context: WorkflowContext
-    ): Either<WorkflowError, WorkflowResult<LoggingState>> =
-      Either.Right(
-        WorkflowResult(
-          state = input,
-          events = listOf(LoggingEvent(UUID.randomUUID(), Instant.now(), input.patientName)),
-          context = context
-        )
-      )
+  private val register = workflow<Patient, Patient>("register-patient") { patient ->
+    emit(PatientRegistered(patient.patientName))
+    patient
   }
 
-  class EventOnlyLoggingWorkflow : Workflow<LoggingState, LoggingState>() {
-    override val id: String = "event-only-logging-workflow"
-
-    override suspend fun executeWorkflow(
-      input: LoggingState,
-      context: WorkflowContext
-    ): Either<WorkflowError, WorkflowResult<LoggingState>> =
-      Either.Right(
-        WorkflowResult(
-          state = input,
-          events = listOf(LoggingEvent(UUID.randomUUID(), Instant.now(), "event-${input.patientName}")),
-          context = context
-        )
-      )
+  private val failing = workflow<Patient, Patient>("failing") {
+    raise(WorkflowError.ExecutionError("patient payload must not appear"))
   }
 
-  class FailingLoggingWorkflow : Workflow<LoggingState, LoggingState>() {
-    override val id: String = "failing-logging-workflow"
-
-    override suspend fun executeWorkflow(
-      input: LoggingState,
-      context: WorkflowContext
-    ): Either<WorkflowError, WorkflowResult<LoggingState>> =
-      Either.Left(WorkflowError.ExecutionError("patient payload must not appear"))
-  }
+  private fun registerPatient(
+    vararg steps: Workflow<Patient, Patient>,
+    logging: UseCaseLoggingBuilder<PatientError, Patient>.() -> Unit = {},
+  ): UseCase<RegisterPatient, PatientError, Int> =
+    useCase(
+      name = "RegisterPatient",
+      errors = { PatientError(it.code, retryable = false) },
+    ) {
+      steps.fold(startWith { command -> Patient(command.patientName) }) { pipeline, step -> pipeline.then(step) }
+        .result { it.patientName.length }
+        .logging(logging)
+    }
 
   @Test
-  fun `logs named use case start and successful outcome without command or event data`() {
+  fun `logs start and success with safe metadata only`() = runTest {
     withUseCaseLogs { events ->
-      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
-        startWith { command -> Either.Right(LoggingState(command.patientName)) }
-        then(LoggingWorkflow())
-      }
-
-      val result = runBlocking { useCase.execute(LoggingCommand("Alice Sensitive")) }
+      val result = registerPatient(register)(RegisterPatient("Alice Sensitive"))
 
       assertTrue(result.isRight())
       val messages = events.map { it.formattedMessage }
       assertEquals(2, messages.size)
-      assertTrue(messages[0].contains("UseCase invocation started"))
-      assertTrue(messages[0].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("UseCase invocation finished"))
-      assertTrue(messages[1].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("outcome=success"))
+      assertTrue(messages[0].contains("UseCase invocation started name=RegisterPatient"))
+      assertTrue(messages[1].contains("UseCase invocation finished name=RegisterPatient outcome=success"))
       assertTrue(messages[1].contains("events=1"))
       assertTrue(messages[1].contains("workflows=1"))
       assertFalse(messages.any { it.contains("Alice Sensitive") })
@@ -91,455 +58,123 @@ class UseCaseLoggingTest {
   }
 
   @Test
-  fun `logs named use case failed outcome without command input or error message data`() {
+  fun `logs failure without input or error message`() = runTest {
     withUseCaseLogs { events ->
-      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
-        startWith { command -> Either.Right(LoggingState(command.patientName)) }
-        then(FailingLoggingWorkflow())
-      }
-
-      val result = runBlocking { useCase.execute(LoggingCommand("Bob Sensitive")) }
+      val result = registerPatient(failing)(RegisterPatient("Bob Sensitive"))
 
       assertTrue(result.isLeft())
       val messages = events.map { it.formattedMessage }
-      assertEquals(2, messages.size)
-      assertTrue(messages[0].contains("UseCase invocation started"))
-      assertTrue(messages[0].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("UseCase invocation finished"))
-      assertTrue(messages[1].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("outcome=failure"))
-      assertFalse(messages.any { it.contains("Bob Sensitive") })
-      assertFalse(messages.any { it.contains("patient payload must not appear") })
+      assertTrue(messages.last().contains("outcome=failure"))
+      assertTrue(messages.last().contains("workflows=1"))
+      assertFalse(messages.any { it.contains("Bob Sensitive") || it.contains("patient payload") })
     }
   }
 
   @Test
-  fun `logs projected invocation failure when projection cannot find expected event`() {
-    withUseCaseLogs { events ->
-      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
-        startWith { command -> Either.Right(LoggingState(command.patientName)) }
-      }
-
-      val result = runBlocking { useCase.executeForEvent<LoggingEvent>(LoggingCommand("Carol Sensitive")) }
-
-      assertTrue(result.isLeft())
-      val messages = events.map { it.formattedMessage }
-      assertEquals(2, messages.size)
-      assertTrue(messages[1].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("outcome=failure"))
-      assertFalse(messages.any { it.contains("Carol Sensitive") })
-    }
-  }
-
-  @Test
-  fun `public use case logs configured name without input or output data`() {
-    withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          then(LoggingWorkflow())
-          result(state<LoggingState>()) { state -> state.patientName }
-        }
-
-      val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
-
-      assertTrue(result.isRight())
-      val messages = events.map { it.formattedMessage }
-      assertEquals(2, messages.size)
-      assertTrue(messages[0].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("outcome=success"))
-      assertTrue(messages[1].contains("durationMs="))
-      assertTrue(messages[1].contains("events=1"))
-      assertTrue(messages[1].contains("workflows=1"))
-      assertFalse(messages.any { it.contains("Diana Sensitive") })
-    }
-  }
-
-  @Test
-  fun `public use case logs failed outcome when startWith throws without input data`() {
-    withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith<LoggingState> { command -> error("invalid patient ${command.patientName}") }
-          result(state<LoggingState>()) { state -> state.patientName }
-        }
-
-      val result = runBlocking { useCase(LoggingCommand("Eve Sensitive")) }
-
-      assertTrue(result.isLeft())
-      val messages = events.map { it.formattedMessage }
-      assertEquals(2, messages.size)
-      assertTrue(messages[0].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("name=RegisterPatient"))
-      assertTrue(messages[1].contains("outcome=failure"))
-      assertFalse(messages.any { it.contains("Eve Sensitive") })
-      assertFalse(messages.any { it.contains("invalid patient") })
-    }
-  }
-
-  @Test
-  fun `global config can disable default summary fields`() {
+  fun `global config can disable default summary fields and color the outcome`() = runTest {
     withUseCaseLogs { events ->
       useCaseLoggingGlobalConfig {
         defaultSummaryFields(DefaultSummaryFields.Disabled)
-      }
-
-      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
-        startWith { command -> Either.Right(LoggingState(command.patientName)) }
-        then(LoggingWorkflow())
-      }
-
-      val result = runBlocking { useCase.execute(LoggingCommand("Alice Sensitive")) }
-
-      assertTrue(result.isRight())
-      val message = events.map { it.formattedMessage }.last()
-      assertTrue(message.contains("name=RegisterPatient"))
-      assertTrue(message.contains("outcome=success"))
-      assertFalse(message.contains("durationMs="))
-      assertFalse(message.contains("events="))
-      assertFalse(message.contains("workflows="))
-    }
-  }
-
-  @Test
-  fun `global config can color only outcome value`() {
-    withUseCaseLogs { events ->
-      useCaseLoggingGlobalConfig {
         outcomeStyle(OutcomeStyle.AnsiColor)
       }
 
-      val useCase = workflowUseCase<LoggingCommand>(name = "RegisterPatient") {
-        startWith { command -> Either.Right(LoggingState(command.patientName)) }
-        then(FailingLoggingWorkflow())
+      registerPatient(register)(RegisterPatient("Alice"))
+
+      val message = events.last().formattedMessage
+      assertTrue(message.contains("outcome=\u001B[32msuccess\u001B[0m"))
+      assertFalse(message.contains("durationMs="))
+      assertFalse(message.contains("events="))
+    }
+  }
+
+  @Test
+  fun `success fields are typed to the final result`() = runTest {
+    withUseCaseLogs { events ->
+      val useCase = registerPatient(register) {
+        success { (state, events) ->
+          field("nameLength", state.patientName.length)
+          field("registered", events.lastEvent<PatientRegistered>() != null)
+        }
       }
 
-      val result = runBlocking { useCase.execute(LoggingCommand("Bob Sensitive")) }
+      useCase(RegisterPatient("Diana Sensitive"))
 
-      assertTrue(result.isLeft())
-      val message = events.map { it.formattedMessage }.last()
-      assertTrue(message.contains("outcome=\u001B[31mfailure\u001B[0m"))
-      assertTrue(message.contains("name=RegisterPatient"))
-      assertFalse(message.contains("\u001B[31mname"))
+      assertEquals(2, events.size)
+      assertTrue(events.last().formattedMessage.endsWith("nameLength=15 registered=true"))
     }
   }
 
   @Test
-  fun `public use case logs success fields from final state`() {
+  fun `failure fields are typed to the mapped error`() = runTest {
     withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            success(state<LoggingState>()) { state ->
-              field("patientLength", state.patientName.length)
-            }
-          }
+      val useCase = registerPatient(failing) {
+        failure { error ->
+          field("reason", error.reason)
+          field("retryable", error.retryable)
         }
-
-      val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
-
-      assertTrue(result.isRight())
-      val message = events.map { it.formattedMessage }.last()
-      assertTrue(message.contains("patientLength=15"))
-      assertFalse(message.contains("Diana Sensitive"))
-    }
-  }
-
-  @Test
-  fun `public use case logs success fields from last event`() {
-    withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          then(EventOnlyLoggingWorkflow())
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            success(event<LoggingEvent>()) { event ->
-              field("eventStepLength", event.patientName.length)
-            }
-          }
-        }
-
-      val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
-
-      assertTrue(result.isRight())
-      val message = events.map { it.formattedMessage }.last()
-      assertTrue(message.contains("eventStepLength=21"))
-      assertFalse(message.contains("event-Diana Sensitive"))
-    }
-  }
-
-  @Test
-  fun `public use case logs success fields from state and event projections together`() {
-    withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          then(EventOnlyLoggingWorkflow())
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            success(state<LoggingState>()) { state ->
-              field("patientLength", state.patientName.length)
-            }
-            success(event<LoggingEvent>()) { event ->
-              field("eventStepLength", event.patientName.length)
-            }
-          }
-        }
-
-      val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
-
-      assertTrue(result.isRight())
-      val message = events.map { it.formattedMessage }.last()
-      assertTrue(message.contains("patientLength=15"))
-      assertTrue(message.contains("eventStepLength=21"))
-      assertFalse(message.contains("Diana Sensitive"))
-      assertFalse(message.contains("event-Diana Sensitive"))
-    }
-  }
-
-  @Test
-  fun `public use case logs failure fields from mapped typed error`() {
-    data class PatientBoundaryError(val reason: String, val retryable: Boolean)
-
-    withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, PatientBoundaryError, String> =
-        useCase(
-          name = "RegisterPatient",
-          errors = { PatientBoundaryError(reason = it::class.simpleName ?: "Unknown", retryable = false) },
-        ) {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          then(FailingLoggingWorkflow())
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            failure { error ->
-              field("reason", error.reason)
-              field("retryable", error.retryable)
-            }
-          }
-        }
-
-      val result = runBlocking { useCase(LoggingCommand("Bob Sensitive")) }
-
-      assertTrue(result.isLeft())
-      val message = events.map { it.formattedMessage }.last()
-      assertTrue(message.contains("reason=ExecutionContextError"))
-      assertTrue(message.contains("retryable=false"))
-      assertFalse(message.contains("Bob Sensitive"))
-      assertFalse(message.contains("patient payload must not appear"))
-    }
-  }
-
-  @Test
-  fun `failure logging projection failure does not change mapped error result`() {
-    data class PatientBoundaryError(val reason: String, val retryable: Boolean)
-
-    withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, PatientBoundaryError, String> =
-        useCase(
-          name = "RegisterPatient",
-          errors = { PatientBoundaryError(reason = it::class.simpleName ?: "Unknown", retryable = false) },
-        ) {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          then(FailingLoggingWorkflow())
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            failure {
-              error("bad failure logger")
-            }
-          }
-        }
-
-      val result = runBlocking { useCase(LoggingCommand("Bob Sensitive")) }
-
-      assertTrue(result.isLeft())
-      val error = (result as Either.Left).value
-      assertEquals(PatientBoundaryError(reason = "ExecutionContextError", retryable = false), error)
-      val messages = events.map { it.formattedMessage }
-      assertTrue(messages.any { it.contains("UseCase logging projection failed") })
-      assertTrue(messages.last().contains("outcome=failure"))
-      assertFalse(messages.any { it.contains("Bob Sensitive") })
-      assertFalse(messages.any { it.contains("patient payload must not appear") })
-      assertFalse(messages.any { it.contains("bad failure logger") })
-    }
-  }
-
-  @Test
-  fun `invalid failure logging field does not change mapped error result`() {
-    data class PatientBoundaryError(val reason: String, val retryable: Boolean)
-
-    listOf("", "outcome").forEach { invalidField ->
-      withUseCaseLogs { events ->
-        val useCase: UseCase<LoggingCommand, PatientBoundaryError, String> =
-          useCase(
-            name = "RegisterPatient",
-            errors = { PatientBoundaryError(reason = it::class.simpleName ?: "Unknown", retryable = false) },
-          ) {
-            startWith { command -> Either.Right(LoggingState(command.patientName)) }
-            then(FailingLoggingWorkflow())
-            result(state<LoggingState>()) { state -> state.patientName }
-            logging {
-              failure { error ->
-                field(invalidField, error.reason)
-              }
-            }
-          }
-
-        val result = runBlocking { useCase(LoggingCommand("Bob Sensitive")) }
-
-        assertTrue(result.isLeft())
-        val error = (result as Either.Left).value
-        assertEquals(PatientBoundaryError(reason = "ExecutionContextError", retryable = false), error)
-        val messages = events.map { it.formattedMessage }
-        assertTrue(messages.any { it.contains("UseCase logging projection failed") })
-        assertTrue(messages.last().contains("outcome=failure"))
-        assertFalse(messages.last().contains("reason=ExecutionContextError"))
-        assertFalse(messages.any { it.contains("Bob Sensitive") })
-        assertFalse(messages.any { it.contains("patient payload must not appear") })
       }
+
+      val result = useCase(RegisterPatient("Bob"))
+
+      assertEquals(Either.Left(PatientError("ExecutionError", false)), result)
+      assertTrue(events.last().formattedMessage.endsWith("reason=ExecutionError retryable=false"))
     }
   }
 
   @Test
-  fun `public use case emits exactly one start and one finish log when local logging is configured`() {
+  fun `a failing field block is reported and does not change the result`() = runTest {
     withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            success(state<LoggingState>()) { state ->
-              field("patientLength", state.patientName.length)
-            }
-          }
-        }
+      val useCase = registerPatient(register) {
+        success { error("cannot collect") }
+        success { field("kept", true) }
+      }
 
-      val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
+      val result = useCase(RegisterPatient("Diana"))
 
-      assertTrue(result.isRight())
+      assertEquals(Either.Right(5), result)
       val messages = events.map { it.formattedMessage }
-      assertEquals(2, messages.size)
-      assertTrue(messages[0].contains("UseCase invocation started"))
-      assertTrue(messages[1].contains("UseCase invocation finished"))
-      assertTrue(messages[1].contains("patientLength=15"))
-    }
-  }
-
-  @Test
-  fun `success logging projection failure does not change result`() {
-    withUseCaseLogs { events ->
-      val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            success(event<LoggingEvent>()) { event ->
-              field("eventLength", event.patientName.length)
-            }
-          }
-        }
-
-      val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
-
-      assertTrue(result.isRight())
-      assertEquals("Diana Sensitive", (result as Either.Right).value)
-      val messages = events.map { it.formattedMessage }
-      assertTrue(messages.any { it.contains("UseCase logging projection failed") })
+      assertTrue(messages.any { it.contains("UseCase logging projection failed name=RegisterPatient") })
       assertTrue(messages.last().contains("outcome=success"))
-      assertFalse(messages.last().contains("eventLength="))
+      assertTrue(messages.last().endsWith("kept=true"))
     }
   }
 
   @Test
-  fun `reserved local fields are rejected and canonical summary is preserved`() {
-    listOf("name", "outcome", "durationMs", "events", "workflows").forEach { reservedField ->
+  fun `reserved field names are rejected and the canonical fields are preserved`() = runTest {
+    listOf("name", "outcome", "durationMs", "events", "workflows").forEach { reserved ->
       withUseCaseLogs { events ->
-        val useCase: UseCase<LoggingCommand, WorkflowError, String> =
-          useCase(name = "RegisterPatient") {
-            startWith { command -> Either.Right(LoggingState(command.patientName)) }
-            result(state<LoggingState>()) { state -> state.patientName }
-            logging {
-              success(state<LoggingState>()) {
-                field(reservedField, "spoofed")
-              }
-            }
-          }
+        val useCase = registerPatient(register) { success { field(reserved, "spoofed") } }
 
-        val result = runBlocking { useCase(LoggingCommand("Diana Sensitive")) }
-
-        assertTrue(result.isRight())
-        val messages = events.map { it.formattedMessage }
-        assertTrue(messages.any { it.contains("UseCase logging projection failed") })
-        val message = messages.last()
-        assertTrue(message.contains("name=RegisterPatient"))
-        assertTrue(message.contains("outcome=success"))
-        assertTrue(message.contains("durationMs="))
-        assertTrue(message.contains("events=0"))
-        assertTrue(message.contains("workflows=0"))
-        assertFalse(message.contains("$reservedField=spoofed"))
+        assertTrue(useCase(RegisterPatient("Diana")).isRight())
+        val message = events.last().formattedMessage
+        assertTrue(message.contains("name=RegisterPatient outcome=success"))
+        assertFalse(message.contains("$reserved=spoofed"))
       }
     }
   }
 
   @Test
-  fun `logging fields are not evaluated when debug logging is disabled`() {
+  fun `field blocks are not evaluated when debug logging is disabled`() = runTest {
     val logger = LoggerFactory.getLogger("io.liquidsoftware.workflow.UseCase") as Logger
     val previousLevel = logger.level
-    val previousAdditive = logger.isAdditive
-    var successFieldsEvaluated = false
-    var failureFieldsEvaluated = false
-
-    resetUseCaseLoggingGlobalConfigForTest()
+    var evaluated = false
     logger.level = Level.INFO
-    logger.isAdditive = false
     try {
-      val successUseCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            success(state<LoggingState>()) {
-              successFieldsEvaluated = true
-              field("patientLength", it.patientName.length)
-            }
-          }
-        }
-
-      val failureUseCase: UseCase<LoggingCommand, WorkflowError, String> =
-        useCase(name = "RegisterPatient") {
-          startWith { command -> Either.Right(LoggingState(command.patientName)) }
-          then(FailingLoggingWorkflow())
-          result(state<LoggingState>()) { state -> state.patientName }
-          logging {
-            failure {
-              failureFieldsEvaluated = true
-              field("errorType", it::class.simpleName)
-            }
-          }
-        }
-
-      val successResult = runBlocking { successUseCase(LoggingCommand("Diana Sensitive")) }
-      val failureResult = runBlocking { failureUseCase(LoggingCommand("Bob Sensitive")) }
-
-      assertTrue(successResult.isRight())
-      assertTrue(failureResult.isLeft())
-      assertFalse(successFieldsEvaluated)
-      assertFalse(failureFieldsEvaluated)
+      val succeeding = registerPatient(register) { success { evaluated = true } }
+      val failingUseCase = registerPatient(failing) { failure { evaluated = true } }
+      succeeding(RegisterPatient("Diana"))
+      failingUseCase(RegisterPatient("Diana"))
+      assertFalse(evaluated)
     } finally {
-      resetUseCaseLoggingGlobalConfigForTest()
       logger.level = previousLevel
-      logger.isAdditive = previousAdditive
     }
   }
 
-  private fun withUseCaseLogs(assertions: (List<ILoggingEvent>) -> Unit) {
+  private inline fun withUseCaseLogs(assertions: (List<ILoggingEvent>) -> Unit) {
     val logger = LoggerFactory.getLogger("io.liquidsoftware.workflow.UseCase") as Logger
     val previousLevel = logger.level
     val previousAdditive = logger.isAdditive
-    val appender = ListAppender<ILoggingEvent>()
-    appender.start()
+    val appender = ListAppender<ILoggingEvent>().apply { start() }
 
     resetUseCaseLoggingGlobalConfigForTest()
     logger.level = Level.DEBUG
