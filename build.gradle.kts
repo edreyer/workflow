@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.liquidsoftware"
-version = "0.8.0"
+version = "0.9.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
@@ -20,7 +20,6 @@ repositories {
 dependencies {
     // Kotlin Coroutines
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.kotlin.reflect)
 
     implementation(platform(libs.arrow.stack))
     implementation(libs.arrow.core)
@@ -28,9 +27,7 @@ dependencies {
 
     // Testing
     testImplementation(kotlin("test"))
-    testImplementation(libs.kotest.runner.junit5)
-    testImplementation(libs.kotest.assertions.core)
-    testImplementation(libs.kotest.framework.engine)
+    testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.logback.classic)
 }
 
@@ -43,6 +40,9 @@ val consumerJvmTarget = 17
 
 kotlin {
     jvmToolchain(25)
+    explicitApi()
+    @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
+    abiValidation()
     compilerOptions {
         jvmTarget.set(JvmTarget.fromTarget(consumerJvmTarget.toString()))
         freeCompilerArgs.add("-Xjdk-release=$consumerJvmTarget")

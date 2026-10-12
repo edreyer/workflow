@@ -1,0 +1,139 @@
+package io.liquidsoftware.workflow
+
+import arrow.core.Either
+import arrow.core.raise.ensure
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
+import java.util.UUID
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+
+/**
+ * The order-processing example from the docs, kept compiling and passing.
+ */
+class OrderProcessingExampleTest {
+
+  // Input and output
+  data class ProcessOrder(val orderId: UUID, val items: List<OrderItem>, val paymentToken: String)
+  data class OrderReceipt(val orderId: UUID, val total: Double, val trackingNumber: String?)
+  data class OrderItem(val sku: String, val quantity: Int, val price: Double)
+
+  // State
+  data class OrderDraft(val orderId: UUID, val items: List<OrderItem>, val paymentToken: String)
+  data class ValidatedOrder(val orderId: UUID, val items: List<OrderItem>, val paymentToken: String)
+  data class Subtotal(val amount: Double)
+  data class Tax(val amount: Double)
+  data class PricedOrder(val order: ValidatedOrder, val subtotal: Double, val tax: Double) {
+    val total: Double get() = subtotal + tax
+  }
+
+  // Events
+  data class OrderValidated(val orderId: UUID) : BaseEvent()
+  data class PaymentCaptured(val orderId: UUID, val amount: Double) : BaseEvent()
+  data class ShipmentPrepared(val orderId: UUID, val trackingNumber: String) : BaseEvent()
+  data class ConfirmationSent(val orderId: UUID) : BaseEvent()
+
+  // Errors
+  sealed interface OrderError : WorkflowError {
+    data object EmptyOrder : OrderError
+    data class PaymentDeclined(val reason: String) : OrderError
+  }
+
+  data class ApiError(val status: Int, val code: String)
+
+  object Keys {
+    val INVENTORY_AVAILABLE = Key<Boolean>("inventoryAvailable")
+  }
+
+  // Steps
+  private val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+    ensure(draft.items.isNotEmpty()) { OrderError.EmptyOrder }
+    emit(OrderValidated(draft.orderId))
+    ValidatedOrder(draft.orderId, draft.items, draft.paymentToken)
+  }
+
+  private val calculateSubtotal = workflow<ValidatedOrder, Subtotal>("calculate-subtotal") { order ->
+    Subtotal(order.items.sumOf { it.quantity * it.price })
+  }
+
+  private val calculateTax = workflow<ValidatedOrder, Tax>("calculate-tax") { order ->
+    Tax(order.items.sumOf { it.quantity * it.price } * 0.08)
+  }
+
+  class CheckInventory : Workflow<PricedOrder, PricedOrder> {
+    override val id = "check-inventory"
+
+    override suspend fun WorkflowStepScope.execute(input: PricedOrder): PricedOrder {
+      delay(100) // inventory service call
+      put(Keys.INVENTORY_AVAILABLE, true)
+      return input
+    }
+  }
+
+  class CapturePayment : Workflow<PricedOrder, PricedOrder> {
+    override val id = "capture-payment"
+
+    override suspend fun WorkflowStepScope.execute(input: PricedOrder): PricedOrder {
+      delay(150) // payment gateway call
+      ensure(input.order.paymentToken != "declined") { OrderError.PaymentDeclined("card declined") }
+      emit(PaymentCaptured(input.order.orderId, input.total))
+      return input
+    }
+  }
+
+  private val prepareShipment = workflow<PricedOrder, PricedOrder>("prepare-shipment") { order ->
+    emit(ShipmentPrepared(order.order.orderId, "TRACK-${order.order.orderId.toString().take(8)}"))
+    order
+  }
+
+  private val sendConfirmation = workflow<PricedOrder, Unit>("send-confirmation") { order ->
+    emit(ConfirmationSent(order.order.orderId))
+  }
+
+  private fun toApiError(error: WorkflowError): ApiError =
+    when (error) {
+      OrderError.EmptyOrder -> ApiError(400, "empty-order")
+      is OrderError.PaymentDeclined -> ApiError(402, "payment-declined")
+      is WorkflowError.ValidationError -> ApiError(400, "invalid")
+      else -> ApiError(500, "internal")
+    }
+
+  // Use case
+  private val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
+    useCase(name = "ProcessOrder", errors = ::toApiError) {
+      startWith { command -> OrderDraft(command.orderId, command.items, command.paymentToken) }
+        .then(validateOrder)
+        .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
+          PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the ValidatedOrder
+        }
+        .parallel(CheckInventory(), CapturePayment())
+        .thenIf(prepareShipment) { context[Keys.INVENTORY_AVAILABLE] == true }
+        .thenLaunch(sendConfirmation)
+        .result { order ->
+          OrderReceipt(order.order.orderId, order.total, events.lastEvent<ShipmentPrepared>()?.trackingNumber)
+        }
+        .logging {
+          success { (order) -> field("itemCount", order.order.items.size) }
+          failure { error -> field("status", error.status) }
+        }
+    }
+
+  private val items = listOf(OrderItem("sku-1", 2, 29.99), OrderItem("sku-2", 1, 49.99))
+
+  @Test
+  fun `processes an order end to end`() = runTest {
+    val orderId = UUID.randomUUID()
+
+    val receipt = assertIs<Either.Right<OrderReceipt>>(processOrder(ProcessOrder(orderId, items, "tok"))).value
+
+    assertTrue(receipt.trackingNumber!!.startsWith("TRACK-"))
+  }
+
+  @Test
+  fun `maps application errors to the API error`() = runTest {
+    assertEquals(Either.Left(ApiError(400, "empty-order")), processOrder(ProcessOrder(UUID.randomUUID(), emptyList(), "tok")))
+    assertEquals(Either.Left(ApiError(402, "payment-declined")), processOrder(ProcessOrder(UUID.randomUUID(), items, "declined")))
+  }
+}

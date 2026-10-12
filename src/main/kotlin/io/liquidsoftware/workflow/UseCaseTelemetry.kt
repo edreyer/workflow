@@ -1,172 +1,76 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
-import java.time.Duration
+import kotlin.time.Duration
 
 /**
- * Summary of a use case execution suitable for logging or metrics.
+ * Summary of one use case invocation, for metrics or custom logging. Register a listener with
+ * `useCaseLoggingGlobalConfig { onSummary { summary -> ... } }`.
  *
- * Error messages are redacted by default because they may contain user data.
+ * Error messages are redacted unless [withErrorMessages] is used.
  */
-data class UseCaseSummary(
+public data class UseCaseSummary(
   val useCaseName: String,
   val succeeded: Boolean,
-  val duration: Duration?,
+  val duration: Duration,
   val eventsCount: Int,
   val executions: List<WorkflowExecution>,
   val rootError: RootErrorInfo? = null,
   val launchedFailures: List<String> = emptyList(),
-  val correlationId: String? = null
-)
+  val correlationId: String? = null,
+) {
+  // Kept out of the constructor, equals, and toString so it cannot leak by accident.
+  internal var errorMessage: String? = null
 
-data class RootErrorInfo(
-  val type: String,
-  val message: String?,
-  val workflowId: String?,
-  val code: String? = null
-)
-
-@JvmName("toSummaryDetailed")
-fun Either<WorkflowError, UseCaseResult<WorkflowState>>.toSummary(
-  useCaseName: String,
-  correlationId: String? = null,
-  launchedFailures: List<String>? = null,
-  executions: List<WorkflowExecution>? = null,
-  duration: Duration? = null,
-  includeErrorMessages: Boolean = false
-): UseCaseSummary {
-  return when (this) {
-    is Either.Right -> {
-      val resolvedCorrelationId = correlationId ?: value.context.get(WorkflowContext.CORRELATION_ID)
-      val resolvedLaunchedFailures = launchedFailures ?: value.context.get(WorkflowContext.LAUNCHED_FAILURES) ?: emptyList()
-      val resolvedExecutions = executions ?: value.context.executions
-
-      UseCaseSummary(
-        useCaseName = useCaseName,
-        succeeded = true,
-        duration = duration ?: calculateDuration(resolvedExecutions),
-        eventsCount = value.events.size,
-        executions = resolvedExecutions,
-        launchedFailures = resolvedLaunchedFailures,
-        correlationId = resolvedCorrelationId
-      )
-    }
-    is Either.Left -> failureSummary(
-      useCaseName = useCaseName,
-      error = value,
-      launchedFailures = launchedFailures ?: emptyList(),
-      executions = executions ?: emptyList(),
-      correlationId = correlationId,
-      duration = duration,
-      includeErrorMessages = includeErrorMessages
-    )
-  }
+  /**
+   * Returns a copy whose [rootError] includes the error message. Only use this when messages are
+   * known to be free of user data.
+   */
+  public fun withErrorMessages(): UseCaseSummary =
+    copy(rootError = rootError?.copy(message = errorMessage)).also { it.errorMessage = errorMessage }
 }
 
 /**
- * Build a summary from a use case result. Provide the use case name for clarity in logs/metrics.
- * Optionally pass a correlationId previously stored in context via [WorkflowContext.CORRELATION_ID].
- * Error messages are redacted by default; set [includeErrorMessages] only when values are known to be safe.
+ * The error a failed invocation ended with.
+ *
+ * @property type The error's class name.
+ * @property code [WorkflowError.code], a stable non-sensitive identifier.
+ * @property message Redacted (`null`) unless [UseCaseSummary.withErrorMessages] was used.
+ * @property workflowId The step that failed, when the failure came from a step.
  */
-fun Either<WorkflowError, UseCaseEvents>.toSummary(
-  useCaseName: String,
-  correlationId: String? = null,
-  launchedFailures: List<String> = emptyList(),
-  executions: List<WorkflowExecution> = emptyList(),
-  duration: Duration? = null,
-  includeErrorMessages: Boolean = false
-): UseCaseSummary {
-  return when (this) {
-    is Either.Right -> {
-      UseCaseSummary(
-        useCaseName = useCaseName,
-        succeeded = true,
-        duration = duration,
-        eventsCount = this.value.events.size,
-        executions = executions,
-        launchedFailures = launchedFailures,
-        correlationId = correlationId
-      )
-    }
-    is Either.Left -> failureSummary(
-      useCaseName = useCaseName,
-      error = value,
-      launchedFailures = launchedFailures,
-      executions = executions,
-      correlationId = correlationId,
-      duration = duration,
-      includeErrorMessages = includeErrorMessages
-    )
-  }
-}
+public data class RootErrorInfo(
+  val type: String,
+  val code: String,
+  val message: String?,
+  val workflowId: String?,
+)
 
-private fun failureSummary(
+internal fun buildSummary(
   useCaseName: String,
-  error: WorkflowError,
-  launchedFailures: List<String>,
-  executions: List<WorkflowExecution>,
-  correlationId: String?,
-  duration: Duration?,
-  includeErrorMessages: Boolean
+  outcome: Either<WorkflowError, *>,
+  finalResult: WorkflowResult<*>?,
+  recorder: ExecutionRecorder,
+  initialContext: WorkflowContext,
+  duration: Duration,
 ): UseCaseSummary {
-  val info = extractRootError(error, includeErrorMessages)
-  val contextExec = (error as? WorkflowError.ExecutionContextError)?.execution
-  val resolvedExecutions = if (executions.isNotEmpty()) executions else listOfNotNull(contextExec)
-  val resolvedDuration = duration ?: calculateDuration(resolvedExecutions)
-
+  val executions = recorder.snapshot()
+  val context = finalResult?.context ?: initialContext
+  val error = outcome.leftOrNull()
   return UseCaseSummary(
     useCaseName = useCaseName,
-    succeeded = false,
-    duration = resolvedDuration,
-    eventsCount = 0,
-    executions = resolvedExecutions,
-    rootError = info,
-    launchedFailures = launchedFailures,
-    correlationId = correlationId
-  )
+    succeeded = error == null,
+    duration = duration,
+    eventsCount = finalResult?.events?.size ?: 0,
+    executions = executions,
+    rootError = error?.let {
+      RootErrorInfo(
+        type = it::class.simpleName ?: "WorkflowError",
+        code = it.code,
+        message = null,
+        workflowId = recorder.failedStepId(),
+      )
+    },
+    launchedFailures = context[WorkflowContext.LAUNCHED_FAILURES].orEmpty(),
+    correlationId = context[WorkflowContext.CORRELATION_ID],
+  ).also { it.errorMessage = error?.message }
 }
-
-private fun calculateDuration(executions: List<WorkflowExecution>): Duration? {
-  if (executions.isEmpty()) {
-    return null
-  }
-
-  val start = executions.minOf { it.startTime }
-  val end = executions.maxOf { it.endTime }
-  return Duration.between(start, end)
-}
-
-private fun extractRootError(error: WorkflowError, includeErrorMessages: Boolean): RootErrorInfo {
-  return when (error) {
-    is WorkflowError.ExecutionContextError -> {
-      val inner = extractRootError(error.error, includeErrorMessages)
-      inner.copy(workflowId = error.execution.workflowId)
-    }
-    is WorkflowError.ChainError -> extractRootError(error.error, includeErrorMessages)
-    is WorkflowError.ValidationError -> RootErrorInfo("ValidationError", error.messageIfIncluded(includeErrorMessages), null)
-    is WorkflowError.ExecutionError -> RootErrorInfo("ExecutionError", error.messageIfIncluded(includeErrorMessages), null)
-    is WorkflowError.DomainError -> RootErrorInfo(
-      type = "DomainError",
-      message = error.messageIfIncluded(includeErrorMessages),
-      workflowId = null,
-      code = error.code
-    )
-    is WorkflowError.ExceptionError -> RootErrorInfo("ExceptionError", error.messageIfIncluded(includeErrorMessages), null)
-    is WorkflowError.CompositionError -> RootErrorInfo("CompositionError", error.messageIfIncluded(includeErrorMessages), null)
-  }
-}
-
-private fun WorkflowError.ValidationError.messageIfIncluded(includeErrorMessages: Boolean): String? =
-  message.takeIf { includeErrorMessages }
-
-private fun WorkflowError.ExecutionError.messageIfIncluded(includeErrorMessages: Boolean): String? =
-  message.takeIf { includeErrorMessages }
-
-private fun WorkflowError.DomainError.messageIfIncluded(includeErrorMessages: Boolean): String? =
-  message.takeIf { includeErrorMessages }
-
-private fun WorkflowError.ExceptionError.messageIfIncluded(includeErrorMessages: Boolean): String? =
-  message.takeIf { includeErrorMessages }
-
-private fun WorkflowError.CompositionError.messageIfIncluded(includeErrorMessages: Boolean): String? =
-  message.takeIf { includeErrorMessages }

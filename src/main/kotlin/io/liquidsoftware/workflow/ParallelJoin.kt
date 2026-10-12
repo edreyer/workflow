@@ -1,555 +1,194 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
-import arrow.core.raise.either
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.selects.select
-import kotlin.reflect.KClass
 
 /**
- * Controls how parallelJoin handles branch failures.
+ * Controls how parallel branches handle failures.
  */
-enum class ParallelErrorPolicy {
-  /**
-   * Wait for all branches and return the first error by parameter order.
-   */
+public enum class ParallelErrorPolicy {
+  /** Wait for every branch, then fail with the first error by parameter order. */
   WaitAll,
-  /**
-   * Cancel remaining branches on the first failure and return that error.
-   */
-  FailFast
+
+  /** Cancel the remaining branches on the first failure and fail with that error. */
+  FailFast,
 }
 
-inline fun <I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, R : WorkflowState> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  crossinline merge: (A, B) -> R,
-): Workflow<I, R> = parallelJoin(a, b, ParallelErrorPolicy.WaitAll, merge)
+/**
+ * Runs 2 workflows concurrently on the same input and merges their outputs with [merge].
+ * The input is the receiver of [merge], so the merged state can keep fields of the input.
+ */
+@Suppress("UNCHECKED_CAST")
+public fun <I, T1, T2, R> parallelJoin(
+  a: Workflow<I, T1>,
+  b: Workflow<I, T2>,
+  policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
+  merge: I.(T1, T2) -> R,
+): Workflow<I, R> = ParallelJoinWorkflow(listOf(a, b), policy) { input, states -> input.merge(states[0] as T1, states[1] as T2) }
 
-inline fun <I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, R : WorkflowState> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B) -> R,
-): Workflow<I, R> = parallelJoinInternal(
-  workflows = listOf(a, b),
-  policy = policy,
-  id = buildParallelJoinId(a, b),
-  merge = { states ->
-    @Suppress("UNCHECKED_CAST")
-    merge(states[0] as A, states[1] as B)
-  }
-)
+/**
+ * Runs 3 workflows concurrently on the same input and merges their outputs with [merge].
+ * The input is the receiver of [merge], so the merged state can keep fields of the input.
+ */
+@Suppress("UNCHECKED_CAST")
+public fun <I, T1, T2, T3, R> parallelJoin(
+  a: Workflow<I, T1>,
+  b: Workflow<I, T2>,
+  c: Workflow<I, T3>,
+  policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
+  merge: I.(T1, T2, T3) -> R,
+): Workflow<I, R> = ParallelJoinWorkflow(listOf(a, b, c), policy) { input, states -> input.merge(states[0] as T1, states[1] as T2, states[2] as T3) }
 
-inline fun <I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, reified C : WorkflowState, R : WorkflowState> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  crossinline merge: (A, B, C) -> R,
-): Workflow<I, R> = parallelJoin(a, b, c, ParallelErrorPolicy.WaitAll, merge)
+/**
+ * Runs 4 workflows concurrently on the same input and merges their outputs with [merge].
+ * The input is the receiver of [merge], so the merged state can keep fields of the input.
+ */
+@Suppress("UNCHECKED_CAST")
+public fun <I, T1, T2, T3, T4, R> parallelJoin(
+  a: Workflow<I, T1>,
+  b: Workflow<I, T2>,
+  c: Workflow<I, T3>,
+  d: Workflow<I, T4>,
+  policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
+  merge: I.(T1, T2, T3, T4) -> R,
+): Workflow<I, R> = ParallelJoinWorkflow(listOf(a, b, c, d), policy) { input, states -> input.merge(states[0] as T1, states[1] as T2, states[2] as T3, states[3] as T4) }
 
-inline fun <I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, reified C : WorkflowState, R : WorkflowState> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, C) -> R,
-): Workflow<I, R> = parallelJoinInternal(
-  workflows = listOf(a, b, c),
-  policy = policy,
-  id = buildParallelJoinId(a, b, c),
-  merge = { states ->
-    @Suppress("UNCHECKED_CAST")
-    merge(states[0] as A, states[1] as B, states[2] as C)
-  }
-)
+/**
+ * Runs 5 workflows concurrently on the same input and merges their outputs with [merge].
+ * The input is the receiver of [merge], so the merged state can keep fields of the input.
+ */
+@Suppress("UNCHECKED_CAST")
+public fun <I, T1, T2, T3, T4, T5, R> parallelJoin(
+  a: Workflow<I, T1>,
+  b: Workflow<I, T2>,
+  c: Workflow<I, T3>,
+  d: Workflow<I, T4>,
+  e: Workflow<I, T5>,
+  policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
+  merge: I.(T1, T2, T3, T4, T5) -> R,
+): Workflow<I, R> = ParallelJoinWorkflow(listOf(a, b, c, d, e), policy) { input, states -> input.merge(states[0] as T1, states[1] as T2, states[2] as T3, states[3] as T4, states[4] as T5) }
 
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  crossinline merge: (A, B, C, D) -> R,
-): Workflow<I, R> = parallelJoin(a, b, c, d, ParallelErrorPolicy.WaitAll, merge)
+/**
+ * Runs 6 workflows concurrently on the same input and merges their outputs with [merge].
+ * The input is the receiver of [merge], so the merged state can keep fields of the input.
+ */
+@Suppress("UNCHECKED_CAST")
+public fun <I, T1, T2, T3, T4, T5, T6, R> parallelJoin(
+  a: Workflow<I, T1>,
+  b: Workflow<I, T2>,
+  c: Workflow<I, T3>,
+  d: Workflow<I, T4>,
+  e: Workflow<I, T5>,
+  f: Workflow<I, T6>,
+  policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
+  merge: I.(T1, T2, T3, T4, T5, T6) -> R,
+): Workflow<I, R> = ParallelJoinWorkflow(listOf(a, b, c, d, e, f), policy) { input, states -> input.merge(states[0] as T1, states[1] as T2, states[2] as T3, states[3] as T4, states[4] as T5, states[5] as T6) }
 
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, C, D) -> R,
-): Workflow<I, R> = parallelJoinInternal(
-  workflows = listOf(a, b, c, d),
-  policy = policy,
-  id = buildParallelJoinId(a, b, c, d),
-  merge = { states ->
-    @Suppress("UNCHECKED_CAST")
-    merge(states[0] as A, states[1] as B, states[2] as C, states[3] as D)
-  }
-)
+/**
+ * Runs 7 workflows concurrently on the same input and merges their outputs with [merge].
+ * The input is the receiver of [merge], so the merged state can keep fields of the input.
+ */
+@Suppress("UNCHECKED_CAST")
+public fun <I, T1, T2, T3, T4, T5, T6, T7, R> parallelJoin(
+  a: Workflow<I, T1>,
+  b: Workflow<I, T2>,
+  c: Workflow<I, T3>,
+  d: Workflow<I, T4>,
+  e: Workflow<I, T5>,
+  f: Workflow<I, T6>,
+  g: Workflow<I, T7>,
+  policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
+  merge: I.(T1, T2, T3, T4, T5, T6, T7) -> R,
+): Workflow<I, R> = ParallelJoinWorkflow(listOf(a, b, c, d, e, f, g), policy) { input, states -> input.merge(states[0] as T1, states[1] as T2, states[2] as T3, states[3] as T4, states[4] as T5, states[5] as T6, states[6] as T7) }
 
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  crossinline merge: (A, B, C, D, E) -> R,
-): Workflow<I, R> = parallelJoin(a, b, c, d, e, ParallelErrorPolicy.WaitAll, merge)
+/**
+ * Runs 8 workflows concurrently on the same input and merges their outputs with [merge].
+ * The input is the receiver of [merge], so the merged state can keep fields of the input.
+ */
+@Suppress("UNCHECKED_CAST")
+public fun <I, T1, T2, T3, T4, T5, T6, T7, T8, R> parallelJoin(
+  a: Workflow<I, T1>,
+  b: Workflow<I, T2>,
+  c: Workflow<I, T3>,
+  d: Workflow<I, T4>,
+  e: Workflow<I, T5>,
+  f: Workflow<I, T6>,
+  g: Workflow<I, T7>,
+  h: Workflow<I, T8>,
+  policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
+  merge: I.(T1, T2, T3, T4, T5, T6, T7, T8) -> R,
+): Workflow<I, R> = ParallelJoinWorkflow(listOf(a, b, c, d, e, f, g, h), policy) { input, states -> input.merge(states[0] as T1, states[1] as T2, states[2] as T3, states[3] as T4, states[4] as T5, states[5] as T6, states[6] as T7, states[7] as T8) }
 
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, C, D, E) -> R,
-): Workflow<I, R> = parallelJoinInternal(
-  workflows = listOf(a, b, c, d, e),
-  policy = policy,
-  id = buildParallelJoinId(a, b, c, d, e),
-  merge = { states ->
-    @Suppress("UNCHECKED_CAST")
-    merge(states[0] as A, states[1] as B, states[2] as C, states[3] as D, states[4] as E)
-  }
-)
-
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  reified F : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  f: Workflow<I, F>,
-  crossinline merge: (A, B, C, D, E, F) -> R,
-): Workflow<I, R> = parallelJoin(a, b, c, d, e, f, ParallelErrorPolicy.WaitAll, merge)
-
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  reified F : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  f: Workflow<I, F>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, C, D, E, F) -> R,
-): Workflow<I, R> = parallelJoinInternal(
-  workflows = listOf(a, b, c, d, e, f),
-  policy = policy,
-  id = buildParallelJoinId(a, b, c, d, e, f),
-  merge = { states ->
-    @Suppress("UNCHECKED_CAST")
-    merge(states[0] as A, states[1] as B, states[2] as C, states[3] as D, states[4] as E, states[5] as F)
-  }
-)
-
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  reified F : WorkflowState,
-  reified G : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  f: Workflow<I, F>,
-  g: Workflow<I, G>,
-  crossinline merge: (A, B, C, D, E, F, G) -> R,
-): Workflow<I, R> = parallelJoin(a, b, c, d, e, f, g, ParallelErrorPolicy.WaitAll, merge)
-
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  reified F : WorkflowState,
-  reified G : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  f: Workflow<I, F>,
-  g: Workflow<I, G>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, C, D, E, F, G) -> R,
-): Workflow<I, R> = parallelJoinInternal(
-  workflows = listOf(a, b, c, d, e, f, g),
-  policy = policy,
-  id = buildParallelJoinId(a, b, c, d, e, f, g),
-  merge = { states ->
-    @Suppress("UNCHECKED_CAST")
-    merge(
-      states[0] as A,
-      states[1] as B,
-      states[2] as C,
-      states[3] as D,
-      states[4] as E,
-      states[5] as F,
-      states[6] as G
-    )
-  }
-)
-
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  reified F : WorkflowState,
-  reified G : WorkflowState,
-  reified H : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  f: Workflow<I, F>,
-  g: Workflow<I, G>,
-  h: Workflow<I, H>,
-  crossinline merge: (A, B, C, D, E, F, G, H) -> R,
-): Workflow<I, R> = parallelJoin(a, b, c, d, e, f, g, h, ParallelErrorPolicy.WaitAll, merge)
-
-inline fun <
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified C : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  reified F : WorkflowState,
-  reified G : WorkflowState,
-  reified H : WorkflowState,
-  R : WorkflowState
-> parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, C>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  f: Workflow<I, F>,
-  g: Workflow<I, G>,
-  h: Workflow<I, H>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, C, D, E, F, G, H) -> R,
-): Workflow<I, R> = parallelJoinInternal(
-  workflows = listOf(a, b, c, d, e, f, g, h),
-  policy = policy,
-  id = buildParallelJoinId(a, b, c, d, e, f, g, h),
-  merge = { states ->
-    @Suppress("UNCHECKED_CAST")
-    merge(
-      states[0] as A,
-      states[1] as B,
-      states[2] as C,
-      states[3] as D,
-      states[4] as E,
-      states[5] as F,
-      states[6] as G,
-      states[7] as H
-    )
-  }
-)
-
-inline fun <C : UseCaseCommand, I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, R : WorkflowState>
-  WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  crossinline merge: (A, B) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, merge)
-
-inline fun <C : UseCaseCommand, I : WorkflowState, reified A : WorkflowState, reified B : WorkflowState, R : WorkflowState>
-  WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, policy, merge)
-
-inline fun <
-  C : UseCaseCommand,
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified CState : WorkflowState,
-  R : WorkflowState
-> WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, CState>,
-  crossinline merge: (A, B, CState) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, c, merge)
-
-inline fun <
-  C : UseCaseCommand,
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified CState : WorkflowState,
-  R : WorkflowState
-> WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, CState>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, CState) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, c, policy, merge)
-
-inline fun <
-  C : UseCaseCommand,
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified CState : WorkflowState,
-  reified D : WorkflowState,
-  R : WorkflowState
-> WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, CState>,
-  d: Workflow<I, D>,
-  crossinline merge: (A, B, CState, D) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, c, d, merge)
-
-inline fun <
-  C : UseCaseCommand,
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified CState : WorkflowState,
-  reified D : WorkflowState,
-  R : WorkflowState
-> WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, CState>,
-  d: Workflow<I, D>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, CState, D) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, c, d, policy, merge)
-
-inline fun <
-  C : UseCaseCommand,
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified CState : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  R : WorkflowState
-> WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, CState>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  crossinline merge: (A, B, CState, D, E) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, merge)
-
-inline fun <
-  C : UseCaseCommand,
-  I : WorkflowState,
-  reified A : WorkflowState,
-  reified B : WorkflowState,
-  reified CState : WorkflowState,
-  reified D : WorkflowState,
-  reified E : WorkflowState,
-  R : WorkflowState
-> WorkflowChainBuilderFactory<C>.parallelJoin(
-  a: Workflow<I, A>,
-  b: Workflow<I, B>,
-  c: Workflow<I, CState>,
-  d: Workflow<I, D>,
-  e: Workflow<I, E>,
-  policy: ParallelErrorPolicy,
-  crossinline merge: (A, B, CState, D, E) -> R,
-): Workflow<I, R> = io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, policy, merge)
-
-@PublishedApi
-internal fun <I : WorkflowState, R : WorkflowState> parallelJoinInternal(
-  workflows: List<Workflow<I, WorkflowState>>,
-  policy: ParallelErrorPolicy,
-  id: String,
-  merge: (List<WorkflowState>) -> R
-): Workflow<I, R> {
-  val inputClass = workflows.firstNotNullOfOrNull { WorkflowUtils.getWorkflowInputClass<WorkflowState>(it) }
-  return ParallelJoinWorkflow(
-    id = id,
-    workflows = workflows,
-    policy = policy,
-    merge = merge,
-    inputClass = inputClass
-  )
-}
-
-@PublishedApi
-internal fun buildParallelJoinId(vararg workflows: Workflow<*, *>): String {
-  return "parallelJoin(${workflows.joinToString(",") { it.id }})"
-}
-
-private class ParallelJoinWorkflow<I : WorkflowState, R : WorkflowState>(
-  override val id: String,
-  private val workflows: List<Workflow<I, WorkflowState>>,
+private class ParallelJoinWorkflow<I, R>(
+  private val workflows: List<Workflow<I, Any?>>,
   private val policy: ParallelErrorPolicy,
-  private val merge: (List<WorkflowState>) -> R,
-  override val inputClass: KClass<out WorkflowState>?
-) : Workflow<I, R>() {
-  override suspend fun executeWorkflow(input: I, context: WorkflowContext): Either<WorkflowError, WorkflowResult<R>> = either {
-    val results = runParallel(input, workflows, policy, context).bind()
-    val mergedState = merge(results.map { it.state })
-    val mergedEvents = results.flatMap { it.events }
-    val mergedContext = results.fold(context) { acc, result -> acc.combine(result.context) }
-    WorkflowResult(mergedState, mergedEvents, mergedContext)
+  private val merge: (I, List<Any?>) -> R,
+) : Workflow<I, R> {
+  override val id: String = "parallelJoin(${workflows.joinToString(",") { it.id }})"
+
+  override suspend fun WorkflowStepScope.execute(input: I): R {
+    val results = runBranches(workflows, input, context, recorder, policy).bind()
+    results.forEach(::absorb)
+    return merge(input, results.map { it.state })
   }
 }
 
-private suspend fun <I : WorkflowState> runParallel(
+/**
+ * Runs [workflows] concurrently on [input]. Each branch sees [context]; the returned results keep
+ * branch order.
+ */
+internal suspend fun <I> runBranches(
+  workflows: List<Workflow<I, Any?>>,
   input: I,
-  workflows: List<Workflow<I, WorkflowState>>,
+  context: WorkflowContext,
+  recorder: ExecutionRecorder,
   policy: ParallelErrorPolicy,
-  context: WorkflowContext
-): Either<WorkflowError, List<WorkflowResult<WorkflowState>>> {
-  return when (policy) {
-    ParallelErrorPolicy.WaitAll -> runParallelWaitAll(input, workflows, context)
-    ParallelErrorPolicy.FailFast -> runParallelFailFast(input, workflows, context)
+): Either<WorkflowError, List<WorkflowResult<Any?>>> = coroutineScope {
+  val deferreds = workflows.map { workflow -> async { workflow.runStep(input, context, recorder) } }
+  when (policy) {
+    ParallelErrorPolicy.WaitAll -> firstErrorOrValues(deferreds.awaitAll())
+    ParallelErrorPolicy.FailFast -> failFast(deferreds)
   }
 }
 
-private suspend fun <I : WorkflowState> runParallelWaitAll(
-  input: I,
-  workflows: List<Workflow<I, WorkflowState>>,
-  context: WorkflowContext
-): Either<WorkflowError, List<WorkflowResult<WorkflowState>>> = coroutineScope {
-  val deferredResults = workflows.map { workflow ->
-    async { workflow.execute(input, context) }
+private fun firstErrorOrValues(
+  results: List<Either<WorkflowError, WorkflowResult<Any?>>>,
+): Either<WorkflowError, List<WorkflowResult<Any?>>> {
+  val values = ArrayList<WorkflowResult<Any?>>(results.size)
+  for (result in results) {
+    when (result) {
+      is Either.Left -> return result
+      is Either.Right -> values += result.value
+    }
   }
-  val results = deferredResults.awaitAll()
-  val firstError = results.filterIsInstance<Either.Left<WorkflowError>>().firstOrNull()
-  if (firstError != null) {
-    Either.Left(firstError.value)
-  } else {
-    val values = results.map { (it as Either.Right<WorkflowResult<WorkflowState>>).value }
-    Either.Right(values)
-  }
+  return Either.Right(values)
 }
 
-private suspend fun <I : WorkflowState> runParallelFailFast(
-  input: I,
-  workflows: List<Workflow<I, WorkflowState>>,
-  context: WorkflowContext
-): Either<WorkflowError, List<WorkflowResult<WorkflowState>>> = coroutineScope {
-  if (workflows.isEmpty()) {
-    return@coroutineScope Either.Right(emptyList())
-  }
-
-  val deferreds = workflows.map { workflow ->
-    async { workflow.execute(input, context) }
-  }
-  val indexByDeferred = deferreds.withIndex().associate { it.value to it.index }
-  val results = MutableList<Either<WorkflowError, WorkflowResult<WorkflowState>>?>(deferreds.size) { null }
+private suspend fun failFast(
+  deferreds: List<Deferred<Either<WorkflowError, WorkflowResult<Any?>>>>,
+): Either<WorkflowError, List<WorkflowResult<Any?>>> {
   val pending = deferreds.toMutableSet()
-  var failureObserved = false
-
-  while (pending.isNotEmpty() && !failureObserved) {
-    val (completed, result) = select<Pair<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>, Either<WorkflowError, WorkflowResult<WorkflowState>>>> {
-      pending.forEach { deferred ->
-        deferred.onAwait { value -> deferred to value }
-      }
+  while (pending.isNotEmpty()) {
+    val (completed, result) = select {
+      pending.forEach { deferred -> deferred.onAwait { deferred to it } }
     }
     pending.remove(completed)
-    results[indexByDeferred.getValue(completed)] = result
     if (result is Either.Left) {
-      failureObserved = true
+      pending.forEach { it.cancel() }
+      pending.joinAll()
+      // Report the earliest failing branch by parameter order among those that finished.
+      val earliest = deferreds
+        .filter { it.isCompleted && !it.isCancelled }
+        .map { it.await() }
+        .filterIsInstance<Either.Left<WorkflowError>>()
+        .firstOrNull()
+      return earliest ?: result
     }
   }
-
-  if (failureObserved) {
-    pending.forEach { it.cancel() }
-    pending.joinAll()
-    deferreds.forEach { deferred ->
-      if (!deferred.isCancelled && deferred.isCompleted) {
-        val result = runCatching { deferred.await() }.getOrNull()
-        if (result != null) {
-          results[indexByDeferred.getValue(deferred)] = result
-        }
-      }
-    }
-    val error = results.mapIndexedNotNull { index, result ->
-      (result as? Either.Left<WorkflowError>)?.let { index to it.value }
-    }.minByOrNull { it.first }?.second
-      ?: WorkflowError.ExecutionError("parallelJoin failed")
-    Either.Left(error)
-  } else {
-    val values = results.map { (it as Either.Right<WorkflowResult<WorkflowState>>).value }
-    Either.Right(values)
-  }
+  return firstErrorOrValues(deferreds.map { it.await() })
 }
