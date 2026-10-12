@@ -178,6 +178,26 @@ class ThenLaunchTest {
   }
 
   @Test
+  fun `launched failure events name the workflow that failed`() {
+    val useCase = workflowUseCase<SeedCommand> {
+      startWith { command -> Either.Right(SeedState(command.value)) }
+      thenLaunch(SideEffectWorkflow("ok", "good"))
+      thenLaunch(FailingSideEffect("audit"))
+      thenLaunch(SideEffectWorkflow("slow", "late", delayMs = 200), timeout = Duration.ofMillis(50))
+      awaitLaunched()
+    }
+
+    val result = runBlocking { useCase.execute(SeedCommand("ok")) }
+
+    assertTrue(result is Either.Right)
+    val failureEvents = result.value.events.filterIsInstance<LaunchedFailureEvent>()
+    assertEquals(
+      listOf("audit" to "failure: audit", "slow" to "thenLaunch timeout: slow"),
+      failureEvents.map { it.workflowId to it.message },
+    )
+  }
+
+  @Test
   fun `thenLaunch timeout yields failure event`() {
     val useCase = workflowUseCase<SeedCommand> {
       startWith { command -> Either.Right(SeedState(command.value)) }

@@ -125,6 +125,29 @@ sealed class WorkflowError {
   data class ChainError(val error: WorkflowError) : WorkflowError()
 }
 
+/**
+ * Returns the error a workflow step actually raised, without the library's bookkeeping wrappers.
+ *
+ * Every failing step is reported as [WorkflowError.ExecutionContextError] so callers can see which
+ * workflow failed. That wrapper also reaches the `errors` mapper of `useCase`, which makes a plain
+ * `when (error) { is DomainError -> ... }` silently fall through. Match on `rootCause()` instead:
+ *
+ * ```kotlin
+ * useCase(name = "PlaceOrder", errors = { error ->
+ *   when (val cause = error.rootCause()) {
+ *     is WorkflowError.DomainError -> ApplicationError(cause.code)
+ *     else -> ApplicationError("unexpected")
+ *   }
+ * }) { ... }
+ * ```
+ */
+tailrec fun WorkflowError.rootCause(): WorkflowError =
+  when (this) {
+    is WorkflowError.ExecutionContextError -> error.rootCause()
+    is WorkflowError.ChainError -> error.rootCause()
+    else -> this
+  }
+
 data class WorkflowResult<out S : WorkflowState>(
   val state: S,
   val events: List<Event> = emptyList(),

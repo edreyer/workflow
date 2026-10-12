@@ -26,13 +26,11 @@ For the architectural motivation, see [Make the Use Cases of Your App Explicit](
 import arrow.core.Either
 import io.liquidsoftware.workflow.UseCase
 import io.liquidsoftware.workflow.UseCaseCommand
-import io.liquidsoftware.workflow.Workflow
-import io.liquidsoftware.workflow.WorkflowContext
 import io.liquidsoftware.workflow.WorkflowError
-import io.liquidsoftware.workflow.WorkflowResult
 import io.liquidsoftware.workflow.WorkflowState
 import io.liquidsoftware.workflow.state
 import io.liquidsoftware.workflow.useCase
+import io.liquidsoftware.workflow.workflow
 import java.util.UUID
 
 data class RegisterUserCommand(
@@ -57,19 +55,11 @@ data class UserDto(
 
 data class ApplicationError(val code: String)
 
-class CreateUserWorkflow(
-  private val users: UserRepository,
-) : Workflow<RegistrationDraft, RegisteredUser>() {
-  override val id = "create-user"
-
-  override suspend fun executeWorkflow(
-    input: RegistrationDraft,
-    context: WorkflowContext,
-  ): Either<WorkflowError, WorkflowResult<RegisteredUser>> {
-    val user = users.create(input.email, input.password)
-    return Either.Right(WorkflowResult(RegisteredUser(user.id, user.email)))
+fun createUser(users: UserRepository) =
+  workflow<RegistrationDraft, RegisteredUser>("create-user") { draft ->
+    val user = users.create(draft.email, draft.password)
+    RegisteredUser(user.id, user.email)
   }
-}
 
 val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
   useCase(
@@ -84,7 +74,7 @@ val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
       }
     }
 
-    then(CreateUserWorkflow(users))
+    then(createUser(users))
 
     result(state<RegisteredUser>()) { state ->
       UserDto(id = state.id, email = state.email)
@@ -166,7 +156,22 @@ result(
 )
 ```
 
-## Workflow Steps
+## Defining Workflow Steps
+
+A workflow step turns one typed state into the next. The lightest way to write one is the `workflow` function. Its block runs inside an Arrow `Raise<WorkflowError>`, so failures use `ensure`, `ensureNotNull`, `raise`, or `bind()`:
+
+```kotlin
+val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+  ensure(draft.items.isNotEmpty()) { WorkflowError.ValidationError("Order has no items") }
+  emit(OrderValidated(draft.orderId))     // record a domain event
+  put(Keys.PRIORITY, draft.isPriority)    // add typed data to the context for later steps
+  ValidatedOrder(draft.orderId, draft.items)
+}
+```
+
+Thrown exceptions become `WorkflowError.ExceptionError`, exactly as with class-based steps. Subclass `Workflow<I, O>` instead when a step needs its own type, such as one that is injected by a DI container.
+
+## Composing Steps
 
 | DSL method | Use when |
 | --- | --- |
@@ -210,6 +215,18 @@ val useCase: UseCase<Input, ApplicationError, Output> =
     then(SomeWorkflow())
     result(state<FinalState>()) { it.toOutput() }
   }
+```
+
+Errors raised inside a step arrive wrapped in `WorkflowError.ExecutionContextError`, which records the workflow that failed. Use `rootCause()` to match on the error the step actually raised:
+
+```kotlin
+errors = { error ->
+  when (val cause = error.rootCause()) {
+    is WorkflowError.DomainError -> ApplicationError(cause.code)
+    is WorkflowError.ValidationError -> ApplicationError("invalid")
+    else -> ApplicationError("unexpected")
+  }
+}
 ```
 
 The `errors` mapper should be total and non-throwing. For the error model and failure behavior, see [Workflow Reference](docs/reference.md#error-handling).

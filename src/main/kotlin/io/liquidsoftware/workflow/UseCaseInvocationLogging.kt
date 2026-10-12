@@ -69,6 +69,7 @@ internal data class UseCaseLogField(
 
 private val reservedUseCaseLogFieldNames = setOf("name", "outcome", "durationMs", "events", "workflows")
 
+@WorkflowDsl
 class UseCaseLogFieldCollector internal constructor() {
   private val fields = mutableListOf<UseCaseLogField>()
 
