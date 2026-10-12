@@ -343,6 +343,8 @@ val merged = context + otherContext // `otherContext` wins on conflicts
 val hasTenant = Keys.TENANT in context
 ```
 
+`key to value` builds a typed `Key.Entry`, so `WorkflowContext.of(Keys.TENANT to 42)` does not compile.
+
 Inside a step, read `context[key]` and add values with `put(key, value)`.
 
 Built-in keys:

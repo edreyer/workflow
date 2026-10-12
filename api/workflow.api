@@ -22,7 +22,13 @@ public abstract interface class io/liquidsoftware/workflow/Event {
 public final class io/liquidsoftware/workflow/Key {
 	public fun <init> (Ljava/lang/String;)V
 	public final fun getName ()Ljava/lang/String;
+	public final fun to (Ljava/lang/Object;)Lio/liquidsoftware/workflow/Key$Entry;
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/liquidsoftware/workflow/Key$Entry {
+	public final fun getKey ()Lio/liquidsoftware/workflow/Key;
+	public final fun getValue ()Ljava/lang/Object;
 }
 
 public final class io/liquidsoftware/workflow/LaunchedFailureEvent : io/liquidsoftware/workflow/Event {
@@ -228,7 +234,7 @@ public final class io/liquidsoftware/workflow/WorkflowContext {
 public final class io/liquidsoftware/workflow/WorkflowContext$Companion {
 	public final fun getCORRELATION_ID ()Lio/liquidsoftware/workflow/Key;
 	public final fun getLAUNCHED_FAILURES ()Lio/liquidsoftware/workflow/Key;
-	public final fun of ([Lkotlin/Pair;)Lio/liquidsoftware/workflow/WorkflowContext;
+	public final fun of ([Lio/liquidsoftware/workflow/Key$Entry;)Lio/liquidsoftware/workflow/WorkflowContext;
 }
 
 public final class io/liquidsoftware/workflow/WorkflowDomainKt {

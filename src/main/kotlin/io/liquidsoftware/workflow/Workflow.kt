@@ -130,25 +130,24 @@ internal class ExecutionRecorder private constructor(
 
   private val lock = Any()
   private val executions = mutableListOf<WorkflowExecution>()
-  private var firstFailedStepId: String? = null
+  private val failedStepIds = java.util.IdentityHashMap<WorkflowError, String>()
 
   /** A recorder for launched side effects: their executions are kept, but never count as the failing step. */
   fun forLaunched(): ExecutionRecorder = ExecutionRecorder(root ?: this, launched = true)
 
-  fun record(execution: WorkflowExecution) {
+  fun record(execution: WorkflowExecution, error: WorkflowError?) {
     val target = root ?: this
     synchronized(target.lock) {
       target.executions += execution
-      if (!launched && !execution.succeeded && target.firstFailedStepId == null) {
-        target.firstFailedStepId = execution.workflowId
-      }
+      // The innermost step records an error first; enclosing steps that pass it on keep that id.
+      if (!launched && error != null) target.failedStepIds.putIfAbsent(error, execution.workflowId)
     }
   }
 
   fun snapshot(): List<WorkflowExecution> = synchronized(lock) { executions.toList() }
 
-  /** The id of the first main-pipeline step that failed, if any. */
-  fun failedStepId(): String? = synchronized(lock) { firstFailedStepId }
+  /** The id of the main-pipeline step that raised [error], or `null` if no step raised it. */
+  fun failedStepId(error: WorkflowError): String? = synchronized(lock) { failedStepIds[error] }
 }
 
 internal val Workflow<*, *>.executionName: String
@@ -175,7 +174,8 @@ internal suspend fun <I, O> Workflow<I, O>.runStep(
       endTime = startTime.plusNanos(duration.inWholeNanoseconds),
       duration = duration,
       succeeded = result.isRight(),
-    )
+    ),
+    result.leftOrNull(),
   )
   return result
 }

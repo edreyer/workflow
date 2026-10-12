@@ -1,5 +1,6 @@
 package io.liquidsoftware.workflow
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -80,6 +81,37 @@ class UseCaseSummaryTest {
     assertEquals("reject-negative", summary.rootError?.workflowId)
     assertEquals(2, summary.eventsCount) // Done + LaunchedFailureEvent
     assertEquals(1, summary.launchedFailures.size)
+  }
+
+  @Test
+  fun `failure summary names the parallel branch whose error was returned`() = runTest {
+    val slowFailure = workflow<Input, Int>("slow-failure") {
+      delay(50)
+      raise(WorkflowError.DomainError("slow", "slow failed"))
+    }
+    val fastFailure = workflow<Input, Int>("fast-failure") { raise(WorkflowError.DomainError("fast", "fast failed")) }
+    val parallelFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "ParallelFailures") {
+      startWith { it }
+        .parallelJoin(slowFailure, fastFailure) { a, b -> a + b }
+        .result { it }
+    }
+
+    parallelFailures(Input(1))
+
+    assertEquals(RootErrorInfo("DomainError", "slow", null, "slow-failure"), summaries.single().rootError)
+  }
+
+  @Test
+  fun `failure outside any step names no step`() = runTest {
+    val rejecting: UseCase<Input, WorkflowError, Int> = useCase(name = "Rejecting") {
+      startWith<Input> { raise(WorkflowError.ValidationError("bad")) }
+        .then(step)
+        .result { it.value }
+    }
+
+    rejecting(Input(1))
+
+    assertNull(summaries.single().rootError?.workflowId)
   }
 
   @Test

@@ -44,7 +44,16 @@ public inline fun <reified T : Event> List<Event>.lastEvent(): T? =
  * @property name Diagnostic name, used in `toString` only.
  */
 public class Key<T : Any>(public val name: String) {
+  /**
+   * Pairs this key with a value of its type, for [WorkflowContext.of]. As a member it takes
+   * precedence over the standard `to`, so a value of the wrong type does not compile.
+   */
+  public infix fun to(value: T): Entry<T> = Entry(this, value)
+
   override fun toString(): String = "Key($name)"
+
+  /** A key and a value of its type. */
+  public class Entry<T : Any> internal constructor(public val key: Key<T>, public val value: T)
 }
 
 /**
@@ -64,7 +73,7 @@ public class WorkflowContext private constructor(
   public operator fun contains(key: Key<*>): Boolean = key in data
 
   /** Returns a copy with [key] set to [value]. */
-  public fun <T : Any> with(key: Key<T>, value: T): WorkflowContext = WorkflowContext(data + (key to value))
+  public fun <T : Any> with(key: Key<T>, value: T): WorkflowContext = WorkflowContext(data + Pair(key, value))
 
   /** Returns a copy with every entry of [other] added; [other] wins on conflicts. */
   public operator fun plus(other: WorkflowContext): WorkflowContext =
@@ -81,8 +90,9 @@ public class WorkflowContext private constructor(
     /** Messages for launched side effects that failed or timed out. */
     public val LAUNCHED_FAILURES: Key<List<String>> = Key("launchedFailures")
 
-    /** Builds a context from typed key/value pairs. */
-    public fun of(vararg entries: Pair<Key<*>, Any>): WorkflowContext = WorkflowContext(mapOf(*entries))
+    /** Builds a context from typed entries, written `key to value`. */
+    public fun of(vararg entries: Key.Entry<*>): WorkflowContext =
+      WorkflowContext(entries.associate { Pair(it.key, it.value) })
   }
 }
 

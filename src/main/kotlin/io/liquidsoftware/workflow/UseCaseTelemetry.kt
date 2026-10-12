@@ -67,7 +67,7 @@ internal fun buildSummary(
         type = it::class.simpleName ?: "WorkflowError",
         code = it.code,
         message = null,
-        workflowId = recorder.failedStepId(),
+        workflowId = recorder.failedStepId(it),
       )
     },
     launchedFailures = context[WorkflowContext.LAUNCHED_FAILURES].orEmpty(),
