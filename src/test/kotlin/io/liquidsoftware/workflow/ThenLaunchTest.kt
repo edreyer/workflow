@@ -2,17 +2,21 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class ThenLaunchTest {
 
@@ -99,6 +103,16 @@ class ThenLaunchTest {
 
     assertEquals(listOf("audit" to "failure: audit", "slow" to "thenLaunch timeout: slow"), failureEvents)
     assertEquals(2, failureMessages.size)
+  }
+
+  @Test
+  fun `a timeout inside the launched step is not reported as a thenLaunch timeout`() = runTest {
+    val ownTimeout = workflow<Seed, Unit>("own-timeout") { withTimeout(10.milliseconds) { awaitCancellation() } }
+    val useCase: UseCase<Seed, WorkflowError, String> = useCase {
+      startWith { it }.thenLaunch(ownTimeout, timeout = 1.seconds).awaitLaunched().result { it.value }
+    }
+
+    assertFailsWith<TimeoutCancellationException> { useCase(Seed("x")) }
   }
 
   @Test

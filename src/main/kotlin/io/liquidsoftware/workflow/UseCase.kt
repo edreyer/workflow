@@ -5,11 +5,10 @@ import arrow.core.raise.Raise
 import arrow.core.raise.either
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.util.UUID
 import kotlin.time.Duration
@@ -341,15 +340,12 @@ private class LaunchStep(
     val context = run.context
     val recorder = run.recorder.forLaunched()
     val deferred = run.coroutineScope.async {
-      try {
-        if (timeout != null) {
-          withTimeout(timeout) { workflow.runStep(state, context, recorder) }
-        } else {
-          workflow.runStep(state, context, recorder)
-        }
-      } catch (ex: TimeoutCancellationException) {
-        // Only our own timeout becomes a launched failure; other cancellation keeps propagating.
-        Either.Left(WorkflowError.ExecutionError("thenLaunch timeout: ${workflow.id}"))
+      if (timeout == null) {
+        workflow.runStep(state, context, recorder)
+      } else {
+        // withTimeoutOrNull only absorbs its own timeout; a timeout raised inside the step keeps propagating.
+        withTimeoutOrNull(timeout) { workflow.runStep(state, context, recorder) }
+          ?: Either.Left(WorkflowError.ExecutionError("thenLaunch timeout: ${workflow.id}"))
       }
     }
     run.launched += LaunchedJob(workflow.id, deferred)
