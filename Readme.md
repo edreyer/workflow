@@ -110,7 +110,7 @@ class CapturePayment(private val gateway: PaymentGateway) : Workflow<PricedOrder
 }
 ```
 
-`ensure`, `ensureNotNull` and the other `Raise` helpers are imported from `arrow.core.raise`. Thrown exceptions become `WorkflowError.ExceptionError`. To unit-test a step, call it directly: `validateOrder(draft)` returns `Either<WorkflowError, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
+`ensure`, `ensureNotNull` and the other `Raise` helpers are imported from `arrow.core.raise`. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `WorkflowError.ExceptionError`. To unit-test a step, call it directly: `validateOrder(draft)` returns `Either<WorkflowError, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
 
 ## Composing Steps
 

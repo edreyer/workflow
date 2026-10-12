@@ -17,6 +17,9 @@ Breaking release. See [Migrating to v0.9.0 Typed Pipelines](docs/migrations/0.9.
 - `toSummary` is replaced by `useCaseLoggingGlobalConfig { onSummary { summary -> } }`. `UseCaseSummary.duration` is a monotonic `kotlin.time.Duration`, `RootErrorInfo` gains `code`, and `withErrorMessages()` replaces `includeErrorMessages`. `WorkflowExecution` gains a monotonic `duration`.
 - `UseCaseCommand` and `WorkflowState` are deprecated and no longer required. Any type can be input or state.
 - Removed the `kotlin-reflect` dependency and reflective input-type discovery (`WorkflowUtils`, `Workflow.inputClass`).
+- A step's own timeout (`withTimeout` inside the step) is now a `WorkflowError.ExceptionError` instead of cancelling the use case. Caller cancellation still propagates.
+- Parallel branches and launched work only merge the context keys they changed, so a stale copy of an untouched key no longer overwrites a newer value.
+- Summaries name the step behind the error that was returned, include events from parallel branches that succeeded before another branch failed, record `thenLaunch` timeouts as failed executions, and still reach listeners when the `errors` mapper throws.
 - Enabled explicit API mode and Kotlin ABI validation (`api/workflow.api`).
 - Tests use `kotlinx-coroutines-test`; the unused kotest dependencies were removed.
 

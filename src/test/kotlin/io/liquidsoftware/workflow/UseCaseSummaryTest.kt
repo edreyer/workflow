@@ -141,6 +141,35 @@ class UseCaseSummaryTest {
   }
 
   @Test
+  fun `failure summary keeps events from parallelJoin branches that succeeded`() = runTest {
+    val emitting = workflow<Input, Int>("emitting-join") { emit(Done(it.value)); 1 }
+    val failing = workflow<Input, Int>("failing-join") {
+      delay(10)
+      raise(WorkflowError.ExecutionError("down"))
+    }
+    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "PartialJoin") {
+      startWith { it }
+        .parallelJoin(emitting, failing) { a, b -> a + b }
+        .result { it }
+    }
+
+    partial(Input(1))
+
+    assertEquals(1, summaries.single().eventsCount)
+  }
+
+  @Test
+  fun `listeners still get a summary when the error mapper throws`() = runTest {
+    val throwingMapper: UseCase<Input, String, Int> = useCase(name = "ThrowingMapper", errors = { error("bad mapper") }) {
+      startWith { it }.then(step).then(rejectNegative).result { it.value }
+    }
+
+    runCatching { throwingMapper(Input(-1)) }
+
+    assertEquals(1, summaries.single().eventsCount)
+  }
+
+  @Test
   fun `failure outside any step names no step`() = runTest {
     val rejecting: UseCase<Input, WorkflowError, Int> = useCase(name = "Rejecting") {
       startWith<Input> { raise(WorkflowError.ValidationError("bad")) }

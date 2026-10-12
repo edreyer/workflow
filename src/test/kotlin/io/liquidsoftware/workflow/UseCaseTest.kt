@@ -2,11 +2,14 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import arrow.core.raise.ensure
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.time.Duration.Companion.milliseconds
 
 class UseCaseTest {
 
@@ -150,6 +153,32 @@ class UseCaseTest {
     }
 
     assertFailsWith<IllegalStateException> { useCase(PlaceOrder("o-1", 0)) }
+  }
+
+  @Test
+  fun `a timeout started inside a step becomes an ExceptionError`() = runTest {
+    val slow = workflow<OrderDraft, OrderDraft>("slow") { withTimeout(10.milliseconds) { awaitCancellation() } }
+    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase {
+      startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
+        .then(slow)
+        .result { it.orderId }
+    }
+
+    assertIs<WorkflowError.ExceptionError>(useCase(PlaceOrder("o-1", 1)).leftOrNull())
+  }
+
+  @Test
+  fun `parallel branches only merge the context keys they changed`() = runTest {
+    val flags = Key<Set<String>>("flags")
+    val addFlag = workflow<OrderDraft, Unit>("add-flag") { put(flags, context[flags].orEmpty() + "b") }
+    val untouched = workflow<OrderDraft, Unit>("untouched") { }
+    val useCase: UseCase<PlaceOrder, WorkflowError, Set<String>?> = useCase {
+      startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
+        .parallel(addFlag, untouched)
+        .result { context[flags] }
+    }
+
+    assertEquals(Either.Right(setOf("a", "b")), useCase(PlaceOrder("o-1", 1), WorkflowContext.of(flags to setOf("a"))))
   }
 
   @Test

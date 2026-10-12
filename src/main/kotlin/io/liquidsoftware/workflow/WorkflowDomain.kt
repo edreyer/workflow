@@ -79,6 +79,13 @@ public class WorkflowContext private constructor(
   public operator fun plus(other: WorkflowContext): WorkflowContext =
     if (other.data.isEmpty()) this else WorkflowContext(data + other.data)
 
+  /**
+   * The entries that differ from [base]. Merging only these keeps a stale copy of an untouched key
+   * from overwriting a newer value.
+   */
+  internal fun changesSince(base: WorkflowContext): WorkflowContext =
+    if (this === base) WorkflowContext() else WorkflowContext(data.filter { (key, value) -> base.data[key] != value })
+
   override fun equals(other: Any?): Boolean = other is WorkflowContext && other.data == data
   override fun hashCode(): Int = data.hashCode()
   override fun toString(): String = "WorkflowContext(keys=${data.keys})"
@@ -105,6 +112,10 @@ public data class WorkflowResult<out S>(
   val events: List<Event> = emptyList(),
   val context: WorkflowContext = WorkflowContext(),
 )
+
+/** This result with only the context entries that differ from [base]. */
+internal fun <S> WorkflowResult<S>.changesSince(base: WorkflowContext): WorkflowResult<S> =
+  copy(context = context.changesSince(base))
 
 /**
  * One workflow step run, recorded for logging and [UseCaseSummary].

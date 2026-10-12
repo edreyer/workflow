@@ -15,7 +15,10 @@ public enum class ParallelErrorPolicy {
   /** Wait for every branch, then fail with the first error by parameter order. */
   WaitAll,
 
-  /** Cancel the remaining branches on the first failure and fail with that error. */
+  /**
+   * Cancel the remaining branches on the first failure. Fails with the first error by parameter
+   * order among the branches that finished.
+   */
   FailFast,
 }
 
@@ -158,7 +161,7 @@ internal suspend fun <I> runBranches(
     ParallelErrorPolicy.WaitAll -> deferreds.awaitAll()
     ParallelErrorPolicy.FailFast -> failFast(deferreds)
   }
-  outcomes.forEach { outcome -> outcome?.onRight(absorb) }
+  outcomes.forEach { outcome -> outcome?.onRight { absorb(it.changesSince(context)) } }
   // The first failure by parameter order wins.
   val failed = outcomes.indexOfFirst { it is Either.Left }
   if (failed >= 0) {

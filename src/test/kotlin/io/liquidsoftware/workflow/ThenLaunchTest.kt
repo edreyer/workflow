@@ -2,7 +2,6 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
@@ -13,7 +12,6 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -106,13 +104,50 @@ class ThenLaunchTest {
   }
 
   @Test
-  fun `a timeout inside the launched step is not reported as a thenLaunch timeout`() = runTest {
+  fun `a timeout inside the launched step is a launched failure, not a thenLaunch timeout`() = runTest {
     val ownTimeout = workflow<Seed, Unit>("own-timeout") { withTimeout(10.milliseconds) { awaitCancellation() } }
-    val useCase: UseCase<Seed, WorkflowError, String> = useCase {
-      startWith { it }.thenLaunch(ownTimeout, timeout = 1.seconds).awaitLaunched().result { it.value }
+    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase {
+      startWith { it }
+        .thenLaunch(ownTimeout, timeout = 1.seconds)
+        .awaitLaunched()
+        .result { events.filterIsInstance<LaunchedFailureEvent>().map { it.message } }
     }
 
-    assertFailsWith<TimeoutCancellationException> { useCase(Seed("x")) }
+    assertEquals(Either.Right(listOf("An exception occurred")), useCase(Seed("x")))
+  }
+
+  @Test
+  fun `merging launched work does not undo context changes made after it started`() = runTest {
+    val counter = Key<Int>("counter")
+    val bump = workflow<Seed, Seed>("bump") { put(counter, 2); it }
+    val useCase: UseCase<Seed, WorkflowError, Int?> = useCase {
+      startWith { it }
+        .thenLaunch(sideEffect("audit", delayMs = 20))
+        .then(bump)
+        .awaitLaunched()
+        .result { context[counter] }
+    }
+
+    assertEquals(Either.Right(2), useCase(Seed("x"), WorkflowContext.of(counter to 1)))
+  }
+
+  @Test
+  fun `a thenLaunch timeout is recorded as a failed execution`() = runTest {
+    val summaries = mutableListOf<UseCaseSummary>()
+    resetUseCaseLoggingGlobalConfigForTest()
+    useCaseLoggingGlobalConfig { onSummary { summaries += it } }
+    try {
+      val useCase: UseCase<Seed, WorkflowError, String> = useCase {
+        startWith { it }.thenLaunch(sideEffect("slow", delayMs = 200), timeout = 50.milliseconds).result { it.value }
+      }
+
+      useCase(Seed("x"))
+
+      val execution = summaries.single().executions.single { it.workflowId == "slow" }
+      assertEquals(false, execution.succeeded)
+    } finally {
+      resetUseCaseLoggingGlobalConfigForTest()
+    }
   }
 
   @Test

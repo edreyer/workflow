@@ -3,6 +3,9 @@ package io.liquidsoftware.workflow
 import arrow.core.Either
 import arrow.core.raise.Raise
 import arrow.core.raise.either
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import java.time.Instant
 import kotlin.time.TimeSource
 
@@ -175,17 +178,30 @@ internal class ExecutionRecorder private constructor(
 internal val Workflow<*, *>.executionName: String
   get() = if (this is LambdaWorkflow) id else this::class.simpleName ?: id
 
+/**
+ * Runs this step, records its execution, and returns its result. When the step fails,
+ * [onFailure] receives the events and context it collected before failing.
+ */
 internal suspend fun <I, O> Workflow<I, O>.runStep(
   input: I,
   context: WorkflowContext,
   recorder: ExecutionRecorder,
+  onFailure: ((WorkflowResult<Nothing?>) -> Unit)? = null,
 ): Either<WorkflowError, WorkflowResult<O>> {
   val startTime = Instant.now()
   val mark = TimeSource.Monotonic.markNow()
-  val result = either {
-    val scope = WorkflowStepScope(this, context, recorder)
-    val state = catchingExceptions { scope.execute(input) }
-    scope.toResult(state)
+  var scope: WorkflowStepScope? = null
+  val result: Either<WorkflowError, WorkflowResult<O>> = try {
+    either<WorkflowError, WorkflowResult<O>> {
+      val stepScope = WorkflowStepScope(this, context, recorder).also { scope = it }
+      val state = catchingExceptions { stepScope.execute(input) }
+      stepScope.toResult(state)
+    }
+  } catch (ex: CancellationException) {
+    // A timeout the step started itself (its own withTimeout) is a failure of the step. Cancellation
+    // of this coroutine, including a caller's timeout, keeps propagating.
+    if (!currentCoroutineContext().isActive) throw ex
+    Either.Left(WorkflowError.ExceptionError("An exception occurred", ex))
   }
   val duration = mark.elapsedNow()
   recorder.record(
@@ -199,6 +215,7 @@ internal suspend fun <I, O> Workflow<I, O>.runStep(
     ),
     result.leftOrNull(),
   )
+  if (result.isLeft() && onFailure != null) scope?.let { onFailure(it.toResult(null)) }
   return result
 }
 

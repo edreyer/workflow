@@ -90,6 +90,9 @@ public class Pipeline<I, E, S> internal constructor(
 ) {
   private fun <N> add(step: PipelineStep): Pipeline<I, E, N> = Pipeline(start, steps + step)
 
+  /** Adds a join; branches that succeeded are kept in the run even when another branch fails. */
+  private fun <N> join(workflow: Workflow<S, N>): Pipeline<I, E, N> = add(SequentialStep(workflow, keepPartialResults = true))
+
   /** Runs [workflow] on the current state; its output becomes the new state. */
   public fun <O> then(workflow: Workflow<S, O>): Pipeline<I, E, O> = add(SequentialStep(workflow))
 
@@ -133,7 +136,7 @@ public class Pipeline<I, E, S> internal constructor(
     b: Workflow<S, T2>,
     policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
     merge: S.(T1, T2) -> R,
-  ): Pipeline<I, E, R> = then(io.liquidsoftware.workflow.parallelJoin(a, b, policy = policy, merge = merge))
+  ): Pipeline<I, E, R> = join(io.liquidsoftware.workflow.parallelJoin(a, b, policy = policy, merge = merge))
 
   /** Runs 3 workflows concurrently on the current state and merges their outputs into the next state. The current state is the receiver of [merge]. */
   public fun <T1, T2, T3, R> parallelJoin(
@@ -142,7 +145,7 @@ public class Pipeline<I, E, S> internal constructor(
     c: Workflow<S, T3>,
     policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
     merge: S.(T1, T2, T3) -> R,
-  ): Pipeline<I, E, R> = then(io.liquidsoftware.workflow.parallelJoin(a, b, c, policy = policy, merge = merge))
+  ): Pipeline<I, E, R> = join(io.liquidsoftware.workflow.parallelJoin(a, b, c, policy = policy, merge = merge))
 
   /** Runs 4 workflows concurrently on the current state and merges their outputs into the next state. The current state is the receiver of [merge]. */
   public fun <T1, T2, T3, T4, R> parallelJoin(
@@ -152,7 +155,7 @@ public class Pipeline<I, E, S> internal constructor(
     d: Workflow<S, T4>,
     policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
     merge: S.(T1, T2, T3, T4) -> R,
-  ): Pipeline<I, E, R> = then(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, policy = policy, merge = merge))
+  ): Pipeline<I, E, R> = join(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, policy = policy, merge = merge))
 
   /** Runs 5 workflows concurrently on the current state and merges their outputs into the next state. The current state is the receiver of [merge]. */
   public fun <T1, T2, T3, T4, T5, R> parallelJoin(
@@ -163,7 +166,7 @@ public class Pipeline<I, E, S> internal constructor(
     e: Workflow<S, T5>,
     policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
     merge: S.(T1, T2, T3, T4, T5) -> R,
-  ): Pipeline<I, E, R> = then(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, policy = policy, merge = merge))
+  ): Pipeline<I, E, R> = join(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, policy = policy, merge = merge))
 
   /** Runs 6 workflows concurrently on the current state and merges their outputs into the next state. The current state is the receiver of [merge]. */
   public fun <T1, T2, T3, T4, T5, T6, R> parallelJoin(
@@ -175,7 +178,7 @@ public class Pipeline<I, E, S> internal constructor(
     f: Workflow<S, T6>,
     policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
     merge: S.(T1, T2, T3, T4, T5, T6) -> R,
-  ): Pipeline<I, E, R> = then(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, policy = policy, merge = merge))
+  ): Pipeline<I, E, R> = join(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, policy = policy, merge = merge))
 
   /** Runs 7 workflows concurrently on the current state and merges their outputs into the next state. The current state is the receiver of [merge]. */
   public fun <T1, T2, T3, T4, T5, T6, T7, R> parallelJoin(
@@ -188,7 +191,7 @@ public class Pipeline<I, E, S> internal constructor(
     g: Workflow<S, T7>,
     policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
     merge: S.(T1, T2, T3, T4, T5, T6, T7) -> R,
-  ): Pipeline<I, E, R> = then(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, policy = policy, merge = merge))
+  ): Pipeline<I, E, R> = join(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, policy = policy, merge = merge))
 
   /** Runs 8 workflows concurrently on the current state and merges their outputs into the next state. The current state is the receiver of [merge]. */
   public fun <T1, T2, T3, T4, T5, T6, T7, T8, R> parallelJoin(
@@ -202,7 +205,7 @@ public class Pipeline<I, E, S> internal constructor(
     h: Workflow<S, T8>,
     policy: ParallelErrorPolicy = ParallelErrorPolicy.WaitAll,
     merge: S.(T1, T2, T3, T4, T5, T6, T7, T8) -> R,
-  ): Pipeline<I, E, R> = then(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, h, policy = policy, merge = merge))
+  ): Pipeline<I, E, R> = join(io.liquidsoftware.workflow.parallelJoin(a, b, c, d, e, f, g, h, policy = policy, merge = merge))
 
   /**
    * Projects the final state into the public output. The block is an Arrow [Raise], and its
@@ -283,6 +286,8 @@ internal class PipelineRun(
 
 internal class LaunchedJob(
   val workflowId: String,
+  /** The context the job started with; only what it changed is merged back. */
+  val context: WorkflowContext,
   val deferred: Deferred<Either<WorkflowError, WorkflowResult<Any?>>>,
 )
 
@@ -293,11 +298,17 @@ internal interface PipelineStep {
 @Suppress("UNCHECKED_CAST")
 private fun Workflow<*, *>.untyped(): Workflow<Any?, Any?> = this as Workflow<Any?, Any?>
 
-private class SequentialStep(workflow: Workflow<*, *>) : PipelineStep {
+private class SequentialStep(
+  workflow: Workflow<*, *>,
+  private val keepPartialResults: Boolean = false,
+) : PipelineStep {
   private val workflow = workflow.untyped()
 
   override suspend fun Raise<WorkflowError>.execute(state: Any?, run: PipelineRun): Any? {
-    val result = workflow.runStep(state, run.context, run.recorder).bind()
+    val base = run.context
+    val onFailure: ((WorkflowResult<Nothing?>) -> Unit)? =
+      if (keepPartialResults) { partial -> run.absorb(partial.changesSince(base)) } else null
+    val result = workflow.runStep(state, run.context, run.recorder, onFailure).bind()
     run.absorb(result)
     return result.state
   }
@@ -343,13 +354,28 @@ private class LaunchStep(
       if (timeout == null) {
         workflow.runStep(state, context, recorder)
       } else {
-        // withTimeoutOrNull only absorbs its own timeout; a timeout raised inside the step keeps propagating.
+        val startTime = Instant.now()
         withTimeoutOrNull(timeout) { workflow.runStep(state, context, recorder) }
-          ?: Either.Left(WorkflowError.ExecutionError("thenLaunch timeout: ${workflow.id}"))
+          ?: timedOut(startTime, timeout, recorder)
       }
     }
-    run.launched += LaunchedJob(workflow.id, deferred)
+    run.launched += LaunchedJob(workflow.id, context, deferred)
     return state
+  }
+
+  /** Records the timed-out run, which was cancelled before it could record itself. */
+  private fun timedOut(startTime: Instant, timeout: Duration, recorder: ExecutionRecorder): Either<WorkflowError, Nothing> {
+    val error = WorkflowError.ExecutionError("thenLaunch timeout: ${workflow.id}")
+    val execution = WorkflowExecution(
+      workflowName = workflow.executionName,
+      workflowId = workflow.id,
+      startTime = startTime,
+      endTime = startTime.plusNanos(timeout.inWholeNanoseconds),
+      duration = timeout,
+      succeeded = false,
+    )
+    recorder.record(execution, error)
+    return Either.Left(error)
   }
 }
 
@@ -368,7 +394,7 @@ private suspend fun drainLaunched(run: PipelineRun) {
   val failures = mutableListOf<String>()
   pending.zip(outcomes).forEach { (job, outcome) ->
     when (outcome) {
-      is Either.Right -> run.absorb(outcome.value)
+      is Either.Right -> run.absorb(outcome.value.changesSince(job.context))
       is Either.Left -> {
         val message = outcome.value.message
         run.events += LaunchedFailureEvent(UUID.randomUUID(), Instant.now(), job.workflowId, message)
@@ -412,13 +438,6 @@ internal class UseCaseRunner<I, E, S, O>(
       }
     }
 
-    val mapped: Either<E, O> = try {
-      outcome.mapLeft(errors)
-    } catch (ex: Throwable) {
-      logUseCaseFinished(name, succeeded = false, mark.elapsedNow(), UseCaseLogMetadata(0, recorder.snapshot().size))
-      throw ex
-    }
-
     // On failure, report what the run had collected: launched work has finished by now (the
     // coroutine scope waited for it), so merging it does not suspend.
     val summaryResult = finalResult ?: runState?.let { run ->
@@ -426,7 +445,17 @@ internal class UseCaseRunner<I, E, S, O>(
       run.snapshot(null)
     }
     val summary = buildSummary(name, outcome, summaryResult, recorder, context, mark.elapsedNow())
-    logUseCaseFinished(name, mapped.isRight(), summary.duration, UseCaseLogMetadata(summary.eventsCount, summary.executions.size)) {
+    val metadata = UseCaseLogMetadata(summary.eventsCount, summary.executions.size)
+
+    val mapped: Either<E, O> = try {
+      outcome.mapLeft(errors)
+    } catch (ex: Throwable) {
+      logUseCaseFinished(name, succeeded = false, summary.duration, metadata)
+      notifySummaryListeners(summary)
+      throw ex
+    }
+
+    logUseCaseFinished(name, mapped.isRight(), summary.duration, metadata) {
       @Suppress("UNCHECKED_CAST")
       definition.logging.fieldsFor(name, finalResult as WorkflowResult<S>?, mapped)
     }

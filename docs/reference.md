@@ -161,7 +161,9 @@ Runs state-producing workflows concurrently on the current state and merges thei
 
 There are overloads for 2 through 8 workflows. The current state is the receiver (`this`) of the merge block, so the new state can keep fields of the old one.
 
-`policy` is a named parameter that defaults to `ParallelErrorPolicy.WaitAll`, which waits for every branch and fails with the first error by parameter order. `ParallelErrorPolicy.FailFast` cancels the remaining branches on the first failure.
+`policy` is a named parameter that defaults to `ParallelErrorPolicy.WaitAll`, which waits for every branch and fails with the first error by parameter order. `ParallelErrorPolicy.FailFast` cancels the remaining branches on the first failure and fails with the first error by parameter order among the branches that finished.
+
+Branches run with the same starting context. Each branch only merges the context keys it changed, and branches that succeeded are kept (their events count in the summary) even when another branch fails.
 
 `parallelJoin` is also a top-level function that returns a `Workflow<I, R>`. Use it to name a join or reuse it:
 
@@ -192,7 +194,7 @@ startWith { command -> command.toValidatedOrder() }
 
 A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and `message`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
 
-Launched work runs inside the use case invocation. Cancelling the caller cancels it too.
+Launched work runs inside the use case invocation. Cancelling the caller cancels it too. When launched work is merged, only the context keys it changed are applied, so it never undoes a change a later step made.
 
 ## Result Projection
 
