@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 - Unreleased
+## 0.9.0 - 2026-10-12
 
 Breaking release. See [Migrating to v0.9.0 Typed Pipelines](docs/migrations/0.9.0-typed-pipelines.md) for before/after examples of every change.
 
@@ -20,18 +20,13 @@ Breaking release. See [Migrating to v0.9.0 Typed Pipelines](docs/migrations/0.9.
 - A step's own timeout (`withTimeout` inside the step) is now a `WorkflowError.ExceptionError` instead of cancelling the use case. Caller cancellation still propagates.
 - Parallel branches and launched work only merge the context keys they changed, so a stale copy of an untouched key no longer overwrites a newer value.
 - Summaries name the step behind the error that was returned, include events from parallel branches that succeeded before another branch failed, record `thenLaunch` timeouts as failed executions, and still reach listeners when the `errors` mapper throws.
+- Published artifacts target Java 17 (bytecode and Gradle `org.gradle.jvm.version` metadata). 0.8.0 declared Java 25, so Gradle projects on Java 17 or 21 could not resolve it. The build itself still uses the JDK 25 toolchain.
+- DSL receivers are marked `@WorkflowDsl`, so a nested block cannot silently call a member of an enclosing one.
+- `LaunchedFailureEvent.workflowId` names the launched workflow instead of `launched-<index>`.
+- `thenLaunch` only reports its own timeout as a timeout; caller cancellation propagates.
+- Removed unused runtime dependencies (`jsoup`, `arrow-fx-coroutines`, `arrow-resilience`) and the unused serialization plugin, so consumers no longer pull them in.
 - Enabled explicit API mode and Kotlin ABI validation (`api/workflow.api`).
 - Tests use `kotlinx-coroutines-test`; the unused kotest dependencies were removed.
-
-## Unreleased
-
-- Published artifacts now target Java 17 (bytecode and Gradle `org.gradle.jvm.version` metadata). 0.8.0 declared Java 25, so Gradle projects on Java 17 or 21 could not resolve it. The build itself still uses the JDK 25 toolchain.
-- Added `workflow<I, O>(id) { input -> ... }` for defining workflow steps from a lambda. The block runs in a `Raise<WorkflowError>` scope (`ensure`, `raise`, `bind()`), can `emit` events and `put` typed context data, and captures its input type without reflection.
-- Added `WorkflowError.rootCause()` to unwrap `ExecutionContextError`/`ChainError` so error mappers can match on the error a step actually raised.
-- Added a `@WorkflowDsl` marker to the DSL builders. A `then(...)` inside `parallel { ... }` that does not fit the parallel block no longer falls through to the enclosing builder as a sequential step; it is now a compile error.
-- Fixed `LaunchedFailureEvent.workflowId` to name the launched workflow instead of `launched-<index>`, and stopped launched failure messages from embedding the `ExecutionContextError` wrapper.
-- Fixed `thenLaunch` treating any cancellation as a timeout; only its own timeout is reported, and caller cancellation propagates.
-- Removed unused runtime dependencies (`jsoup`, `arrow-fx-coroutines`, `arrow-resilience`) and the unused serialization plugin, so consumers no longer pull them in.
 
 ## 0.8.0 - 2026-06-28
 
