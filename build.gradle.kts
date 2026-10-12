@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.dokka)
@@ -36,12 +38,23 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// Build with JDK 25, but publish bytecode and Gradle metadata that consumers on Java 17+ can use.
+val consumerJvmTarget = 17
+
 kotlin {
     jvmToolchain(25)
+    compilerOptions {
+        jvmTarget.set(JvmTarget.fromTarget(consumerJvmTarget.toString()))
+        freeCompilerArgs.add("-Xjdk-release=$consumerJvmTarget")
+    }
 }
 
 java {
     withSourcesJar()
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(consumerJvmTarget)
 }
 
 tasks.register<Jar>("javadocJar") {

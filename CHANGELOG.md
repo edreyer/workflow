@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Published artifacts now target Java 17 (bytecode and Gradle `org.gradle.jvm.version` metadata). 0.8.0 declared Java 25, so Gradle projects on Java 17 or 21 could not resolve it. The build itself still uses the JDK 25 toolchain.
 - Added `workflow<I, O>(id) { input -> ... }` for defining workflow steps from a lambda. The block runs in a `Raise<WorkflowError>` scope (`ensure`, `raise`, `bind()`), can `emit` events and `put` typed context data, and captures its input type without reflection.
 - Added `WorkflowError.rootCause()` to unwrap `ExecutionContextError`/`ChainError` so error mappers can match on the error a step actually raised.
 - Added a `@WorkflowDsl` marker to the DSL builders. A `then(...)` inside `parallel { ... }` that does not fit the parallel block no longer falls through to the enclosing builder as a sequential step; it is now a compile error.
