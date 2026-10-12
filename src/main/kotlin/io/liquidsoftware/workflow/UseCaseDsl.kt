@@ -154,6 +154,7 @@ fun interface UseCaseResultProjection<out O> {
   fun project(result: UseCaseResult<WorkflowState>, useCaseName: String): Either<WorkflowError, O>
 }
 
+@WorkflowDsl
 class UseCaseLoggingBuilder<E> internal constructor() {
   private val successProjections = mutableListOf<UseCaseSuccessLogProjection>()
   private var failureProjection: UseCaseFailureLogProjection<E>? = null

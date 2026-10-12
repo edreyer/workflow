@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Published artifacts now target Java 17 (bytecode and Gradle `org.gradle.jvm.version` metadata). 0.8.0 declared Java 25, so Gradle projects on Java 17 or 21 could not resolve it. The build itself still uses the JDK 25 toolchain.
+- Added `workflow<I, O>(id) { input -> ... }` for defining workflow steps from a lambda. The block runs in a `Raise<WorkflowError>` scope (`ensure`, `raise`, `bind()`), can `emit` events and `put` typed context data, and captures its input type without reflection.
+- Added `WorkflowError.rootCause()` to unwrap `ExecutionContextError`/`ChainError` so error mappers can match on the error a step actually raised.
+- Added a `@WorkflowDsl` marker to the DSL builders. A `then(...)` inside `parallel { ... }` that does not fit the parallel block no longer falls through to the enclosing builder as a sequential step; it is now a compile error.
+- Fixed `LaunchedFailureEvent.workflowId` to name the launched workflow instead of `launched-<index>`, and stopped launched failure messages from embedding the `ExecutionContextError` wrapper.
+- Fixed `thenLaunch` treating any cancellation as a timeout; only its own timeout is reported, and caller cancellation propagates.
+- Removed unused runtime dependencies (`jsoup`, `arrow-fx-coroutines`, `arrow-resilience`) and the unused serialization plugin, so consumers no longer pull them in.
+
 ## 0.8.0 - 2026-06-28
 
 - Updated Kotlin to 2.4.0.

@@ -20,6 +20,12 @@ abstract class Workflow<in I : WorkflowState, out O : WorkflowState> {
   open val inputClass: KClass<out WorkflowState>?
     get() = WorkflowUtils.getWorkflowInputClass(this::class)
 
+  /**
+   * Name recorded in [WorkflowExecution.workflowName]. Defaults to the class name.
+   */
+  internal open val executionName: String
+    get() = this::class.simpleName ?: "UnknownWorkflow"
+
   protected open suspend fun executeWorkflow(input: I, context: WorkflowContext): Either<WorkflowError, WorkflowResult<O>> =
     executeWorkflow(input)
 
@@ -39,7 +45,7 @@ abstract class Workflow<in I : WorkflowState, out O : WorkflowState> {
     val endTime = Instant.now()
 
     val execution = WorkflowExecution(
-      workflowName = this::class.simpleName ?: "UnknownWorkflow",
+      workflowName = executionName,
       workflowId = id,
       startTime = startTime,
       endTime = endTime,

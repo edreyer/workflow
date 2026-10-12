@@ -8,6 +8,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
 import java.time.Duration
@@ -37,6 +38,7 @@ fun <C : UseCaseCommand> workflowUseCase(
   return factory.build(name)
 }
 
+@WorkflowDsl
 open class WorkflowChainBuilderFactory<C : UseCaseCommand> internal constructor() {
   private var startWithFactory: ((C) -> Either<WorkflowError, WorkflowState>)? = null
   private var startCalled = false
@@ -392,8 +394,13 @@ internal interface WorkflowStep {
 internal class WorkflowExecutionScope(
   val coroutineScope: CoroutineScope,
 ) {
-  val launchedJobs = mutableListOf<Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>>()
+  val launchedJobs = mutableListOf<LaunchedJob>()
 }
+
+internal class LaunchedJob(
+  val workflowId: String,
+  val deferred: Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>>,
+)
 
 private class SequentialStep<I : WorkflowState, O : WorkflowState>(
   private val workflow: Workflow<I, O>
@@ -428,6 +435,7 @@ private class ConditionalStep<I : WorkflowState, O : WorkflowState>(
   }
 }
 
+@WorkflowDsl
 class ParallelSideEffectScope<I : WorkflowState> internal constructor() {
   private val workflows = mutableListOf<SideEffectWorkflow<I>>()
 
@@ -489,19 +497,18 @@ private class LaunchStep<I : WorkflowState>(
     )
     val deferred: Deferred<Either<WorkflowError, WorkflowResult<WorkflowState>>> = executionScope.coroutineScope.async {
       try {
-        val execution = if (timeout != null) {
+        if (timeout != null) {
           withTimeout(timeout.toMillis()) { workflow.execute(input, result.context) }
         } else {
           workflow.execute(input, result.context)
         }
-        execution
-      } catch (ex: CancellationException) {
+      } catch (ex: TimeoutCancellationException) {
+        // Only our own timeout is reported as a launched failure. Any other cancellation
+        // (for example the caller cancelling the use case) must keep propagating.
         Either.Left(WorkflowError.ExecutionError("thenLaunch timeout: ${workflow.id}"))
-      } catch (t: Throwable) {
-        Either.Left(WorkflowError.ExceptionError("thenLaunch failed: ${workflow.id}", t))
       }
     }
-    executionScope.launchedJobs.add(deferred)
+    executionScope.launchedJobs.add(LaunchedJob(workflow.id, deferred))
     return Either.Right(result)
   }
 }
@@ -517,8 +524,9 @@ private data object AwaitLaunchedStep : WorkflowStep {
     }
     val pending = launched.toList()
     launched.clear()
-    val outcomes = runCatching { pending.awaitAll() }.getOrElse { ex ->
-      pending.forEach { it.cancel() }
+    val outcomes = runCatching { pending.map { it.deferred }.awaitAll() }.getOrElse { ex ->
+      if (ex is CancellationException) throw ex
+      pending.forEach { it.deferred.cancel() }
       return Either.Right(
         result.copy(
           context = result.context.addData(
@@ -529,26 +537,29 @@ private data object AwaitLaunchedStep : WorkflowStep {
       )
     }
     val successes = outcomes.filterIsInstance<Either.Right<WorkflowResult<WorkflowState>>>().map { it.value }
-    val failures = outcomes.filterIsInstance<Either.Left<WorkflowError>>().map { it.value }
-    val failureEvents = failures.mapIndexed { idx, failure ->
+    val failuresWithIds = pending.zip(outcomes).mapNotNull { (job, outcome) ->
+      (outcome as? Either.Left<WorkflowError>)?.let { job.workflowId to it.value }
+    }
+    val failures = failuresWithIds.map { it.second }
+    val failureEvents = failuresWithIds.map { (workflowId, failure) ->
       LaunchedFailureEvent(
         id = UUID.randomUUID(),
         timestamp = Instant.now(),
-        workflowId = "launched-$idx",
-        message = when (failure) {
-          is WorkflowError.ExecutionError -> failure.message
-          is WorkflowError.ExceptionError -> failure.message
-          else -> failure.toString()
+        workflowId = workflowId,
+        message = when (val cause = failure.rootCause()) {
+          is WorkflowError.ExecutionError -> cause.message
+          is WorkflowError.ExceptionError -> cause.message
+          else -> cause.toString()
         }
       )
     }
     val mergedEvents = result.events + successes.flatMap { it.events } + failureEvents
     val mergedContext = successes.fold(result.context) { acc, value -> acc.combine(value.context) }
-    val failureMessages = if (failures.isEmpty()) emptyList() else failures.map { failure ->
-      when (failure) {
-        is WorkflowError.ExecutionError -> "thenLaunch failure (${failure.message})"
-        is WorkflowError.ExceptionError -> "thenLaunch exception (${failure.message})"
-        else -> "thenLaunch failure ($failure)"
+    val failureMessages = failures.map { failure ->
+      when (val cause = failure.rootCause()) {
+        is WorkflowError.ExecutionError -> "thenLaunch failure (${cause.message})"
+        is WorkflowError.ExceptionError -> "thenLaunch exception (${cause.message})"
+        else -> "thenLaunch failure ($cause)"
       }
     }
     val contextWithFailures = if (failureMessages.isEmpty()) mergedContext
