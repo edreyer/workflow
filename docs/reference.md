@@ -194,7 +194,7 @@ startWith { command -> command.toValidatedOrder() }
 
 A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and `message`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
 
-Launched work runs inside the use case invocation. Cancelling the caller cancels it too. When launched work is merged, only the context keys it changed are applied, so it never undoes a change a later step made.
+Launched work runs inside the use case invocation. Cancelling the caller cancels it too. When launched work is merged, only the context keys it changed are applied, so keys it left alone keep any newer value a later step set. If both changed the same key, the launched value wins.
 
 ## Result Projection
 
