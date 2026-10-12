@@ -27,47 +27,28 @@ As an application grows, those business flows often get fragmented across servic
 ```kotlin
 val processOrder: UseCase<ProcessOrderCommand, WorkflowError, OrderReceipt> = useCase(name = "ProcessOrder") {
   startWith { command ->
-    OrderDraftState(
+    OrderDraft(
       orderId = command.orderId,
       customerId = command.customerId,
       items = command.items,
-      totalAmount = command.totalAmount
-    ).right()
-  }
-
-  then(ValidateOrderWorkflow("validate-order"))
-
-  parallelJoin(
-    CalculateSubtotalWorkflow("calc-subtotal"),
-    CalculateTaxWorkflow("calc-tax"),
-  ) { subtotal, tax ->
-    PricingState(
-      orderId = subtotal.orderId,
-      customerId = subtotal.customerId,
-      items = subtotal.items,
-      totalAmount = subtotal.totalAmount,
-      shippingAddress = subtotal.shippingAddress,
-      subtotal = subtotal.subtotal,
-      tax = tax.tax,
-      total = subtotal.subtotal + tax.tax
+      shippingAddress = command.shippingAddress,
     )
   }
-
-  parallel {
-    then(CheckInventoryWorkflow("check-inventory"))
-    then(ProcessPaymentWorkflow("process-payment"))
-  }
-
-  thenIf(PrepareShipmentWorkflow("prepare-shipment")) { result ->
-    val paymentSuccessful = when (result.getFromEvent(PaymentProcessedEvent::payment)) {
-      is SuccessfulPayment -> true
-      else -> false
+    .then(ValidateOrderWorkflow())
+    .parallelJoin(CalculateSubtotalWorkflow(), CalculateTaxWorkflow()) { subtotal, tax ->
+      PricedOrder(
+        order = this, // the validated order
+        subtotal = subtotal.amount,
+        tax = tax.amount,
+        total = subtotal.amount + tax.amount,
+      )
     }
-
-    result.context.getTypedData<Boolean>("inventoryAvailable") == true && paymentSuccessful
-  }
-
-  result(state<OrderCompletedState>()) { state -> state.toReceipt() }
+    .parallel(CheckInventoryWorkflow(inventory), ProcessPaymentWorkflow(payments))
+    .thenIf(PrepareShipmentWorkflow(shipping)) {
+      val paymentSuccessful = events.lastEvent<PaymentProcessedEvent>()?.payment is SuccessfulPayment
+      context[Keys.INVENTORY_AVAILABLE] == true && paymentSuccessful
+    }
+    .result { order -> order.toReceipt() }
 }
 ```
 
@@ -82,10 +63,10 @@ This reads like the use case itself:
 ## Advantages
 
 - Explicit use cases: the business flow lives in one place instead of being inferred from service calls.
-- Typed state transitions: each workflow step declares what it accepts and what it returns.
+- Typed state transitions: each workflow step declares what it accepts and what it returns, and the compiler checks that each step accepts the previous step's output.
 - Composable steps: build complex behavior from small workflows with clear responsibilities.
 - Built-in flow control: sequence, branch, and parallelize without ad hoc orchestration code.
-- Predictable error handling: workflows return typed results instead of relying on implicit exception flow.
+- Predictable error handling: workflows raise typed errors, including your own `WorkflowError` types, instead of relying on implicit exception flow.
 - Shared context and events: carry metadata and emitted domain events through the use case.
 - Better testability: test individual workflows in isolation and test the full use case as a composed unit.
 
@@ -95,11 +76,11 @@ If your service layer is turning into a web of hidden business logic, `workflow`
 
 Defining the workflow is only part of the problem. Real applications also need to expose that workflow at a module, web, CLI, or job boundary.
 
-The primary `useCase` DSL handles the boundary directly:
+The `useCase` builder handles the boundary directly:
 
 - accept public input
 - define the workflow steps
-- choose whether the public result comes from the final state or an emitted event
+- choose whether the public result comes from the final state, an emitted event, or the context
 - map `WorkflowError` into a boundary error type
 - map the final internal result into a public output
 
@@ -112,9 +93,9 @@ val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
     errors = WorkflowError::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-    result(state<RegisteredUserState>()) { state -> state.user.toDto() }
+      .then(HashPasswordStep(passwordHasher))
+      .then(PersistUserStep(userRepository, userIdGenerator))
+      .result { state -> state.user.toDto() }
   }
 ```
 
@@ -125,7 +106,7 @@ The workflow stays visible. The boundary stays typed. The separate adapter layer
 The core boundary abstraction is:
 
 ```kotlin
-fun interface UseCase<I, E, O> {
+fun interface UseCase<in I, out E, out O> {
   suspend operator fun invoke(input: I, context: WorkflowContext): Either<E, O>
 
   suspend operator fun invoke(input: I): Either<E, O> =
@@ -137,7 +118,7 @@ Use `useCase` when application code needs a callable use case with public input,
 
 ## State Projection
 
-Use `useCase(errors = ...) { ... }` with `state<StateType>()` when the public result comes from the final workflow state and errors should be mapped to an application type.
+Use `useCase(errors = ...) { ... }` with `.result { state -> ... }` when the public result comes from the final workflow state and errors should be mapped to an application type.
 
 ```kotlin
 val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
@@ -146,9 +127,9 @@ val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
     errors = WorkflowError::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-    result(state<RegisteredUserState>()) { state -> state.user.toDto() }
+      .then(HashPasswordStep(passwordHasher))
+      .then(PersistUserStep(userRepository, userIdGenerator))
+      .result { state -> state.user.toDto() }
   }
 ```
 
@@ -158,19 +139,19 @@ If raw workflow errors are acceptable, omit `errors = ...`:
 val registerUser: UseCase<RegisterUserCommand, WorkflowError, UserDto> =
   useCase(name = "RegisterUser") {
     startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-    result(state<RegisteredUserState>()) { state -> state.user.toDto() }
+      .then(HashPasswordStep(passwordHasher))
+      .then(PersistUserStep(userRepository, userIdGenerator))
+      .result { state -> state.user.toDto() }
   }
 ```
 
-The `errors = ...` mapper is expected to be total and non-throwing. If you want to preserve raw workflow errors, omit it.
+The `errors = ...` mapper is expected to be total and non-throwing. It receives errors exactly as they were raised, including your own `WorkflowError` types. If you want to preserve raw workflow errors, omit it.
 
 ## Event Projection
 
-Use `event<EventType>()` when the public result is driven by an emitted event.
+Use `requireEvent<EventType>()` inside `.result { }` when the public result is driven by an emitted event.
 
-Event projection returns the last emitted event of the requested type.
+It returns the last emitted event of the requested type, or fails the use case with `WorkflowError.CompositionError` when none was emitted.
 
 ```kotlin
 val registerUserCreatedEvent: UseCase<RegisterUserCommand, ApplicationError, UserCreatedEvent> =
@@ -179,9 +160,9 @@ val registerUserCreatedEvent: UseCase<RegisterUserCommand, ApplicationError, Use
     errors = WorkflowError::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-    then(HashPasswordStep(passwordHasher))
-    then(PersistUserStep(userRepository, userIdGenerator))
-    result(event<UserCreatedEvent>()) { event -> event }
+      .then(HashPasswordStep(passwordHasher))
+      .then(PersistUserStep(userRepository, userIdGenerator))
+      .result { requireEvent<UserCreatedEvent>() }
   }
 ```
 
@@ -193,10 +174,10 @@ If the boundary needs correlation or request metadata, invoke the contextual ove
 val result =
   registerUser(
     RegisterUserCommand(...),
-    WorkflowContext().addData(WorkflowContext.CORRELATION_ID, "corr-123")
+    WorkflowContext.of(WorkflowContext.CORRELATION_ID to "corr-123"),
   )
 ```
 
-If you do not supply context, the use case uses the library's normal empty `WorkflowContext`.
+If you do not supply context, the use case starts with an empty `WorkflowContext`.
 
 Taken together, this lets `workflow` model not only the internal orchestration of a business flow, but also the typed boundary that real applications need to expose that flow cleanly.

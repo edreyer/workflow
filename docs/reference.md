@@ -1,329 +1,362 @@
 # Workflow Reference
 
-This document covers the public DSL and lower-level APIs. Start with the [README](../Readme.md) if you want the shortest path to usage.
+This document covers the public API. Start with the [README](../Readme.md) if you want the shortest path to usage.
 
 ## Core Types
 
 | Type | Purpose |
 | --- | --- |
 | `UseCase<I, E, O>` | Public callable application use case. Accepts input `I`, returns `Either<E, O>`. |
-| `WorkflowUseCase<C>` | Lower-level workflow-native execution model. Returns detailed state, event, and context data. |
-| `UseCaseCommand` | Marker interface for public use case input. |
-| `WorkflowState` | Marker interface for typed state passed between workflow steps. |
+| `Pipeline<I, E, S>` | Immutable, typed chain of steps built inside `useCase { }`. `S` is the current state type. |
 | `Workflow<I, O>` | A focused workflow step from input state `I` to output state `O`. |
-| `WorkflowResult<S>` | Output of a workflow step: state, events, and context. |
-| `UseCaseResult<S>` | Detailed output of a workflow use case: final state, all events, and context. |
-| `Event` | Domain event emitted during workflow execution. |
-| `WorkflowContext` | Immutable metadata and execution-history container. |
-| `WorkflowError` | Workflow-native error model. |
+| `WorkflowStepScope` | Receiver of a step: raise errors, read `context`, `emit` events, `put` context data. |
+| `WorkflowResult<S>` | State, events, and context: the outcome of a step run on its own, and the receiver of `thenIf` predicates. |
+| `ResultScope<S>` | Receiver of `result { }`: final events and context, plus `requireEvent<T>()`. |
+| `Event` | Domain event emitted during execution. `BaseEvent` fills in `id` and `timestamp`. |
+| `WorkflowContext` | Immutable, typed metadata that flows through the use case. |
+| `Key<T>` | Typed key for a `WorkflowContext` value. |
+| `WorkflowError` | Error interface. The library's errors are nested in it; applications can implement it. |
+| `UseCaseSummary` | Per-invocation summary passed to `onSummary` listeners. |
+
+Any type can be use case input or workflow state. The old `UseCaseCommand` and `WorkflowState` marker interfaces are deprecated and no longer needed; remove them from your types.
 
 ## `useCase`
 
-Use `useCase` for application-facing boundaries.
+Use `useCase` to build an application-facing use case. Its block starts a pipeline with `startWith`, chains steps, and ends with `result { }`.
 
 ```kotlin
-val useCase: UseCase<Input, ApplicationError, Output> =
-  useCase(
-    name = "Example",
-    errors = { error -> error.toApplicationError() },
-  ) {
-    startWith { input -> Either.Right(InitialState(input.id)) }
-    then(FirstWorkflow())
-    then(SecondWorkflow())
-    result(state<FinalState>()) { state -> state.toOutput() }
+val placeOrder: UseCase<PlaceOrder, ApplicationError, OrderDto> =
+  useCase(name = "PlaceOrder", errors = ::toApplicationError) {
+    startWith { command -> OrderDraft(command.id, command.items) }
+      .then(validateOrder)
+      .then(priceOrder)
+      .result { order -> order.toDto() }
   }
 ```
 
-If callers can work with raw workflow errors, omit `errors`:
+If callers can work with raw workflow errors, omit `errors`. The use case then returns `WorkflowError`:
 
 ```kotlin
-val useCase: UseCase<Input, WorkflowError, Output> =
-  useCase(name = "Example") {
-    startWith { input -> Either.Right(InitialState(input.id)) }
-    then(FirstWorkflow())
-    result(state<FinalState>()) { state -> state.toOutput() }
+val placeOrder: UseCase<PlaceOrder, WorkflowError, OrderDto> =
+  useCase(name = "PlaceOrder") {
+    startWith { command -> OrderDraft(command.id, command.items) }
+      .then(validateOrder)
+      .result { order -> order.toDto() }
   }
 ```
 
-`result(...)` is required and can be called only once.
+Kotlin cannot infer the input type from the block, so either declare the expected type as above or pass type arguments: `useCase<PlaceOrder, OrderDto> { ... }`, or `useCase<PlaceOrder, ApplicationError, OrderDto>(errors = ...) { ... }`.
+
+`name` is a stable operational name used in logs and summaries. It defaults to `"UseCase"`. Do not include user or request data.
+
+Call a use case with its input, and optionally a `WorkflowContext`:
+
+```kotlin
+val result: Either<ApplicationError, OrderDto> = placeOrder(command)
+val traced = placeOrder(command, WorkflowContext.of(WorkflowContext.CORRELATION_ID to "corr-123"))
+```
+
+`UseCase` is a `fun interface`, so you can also implement it directly.
 
 ### Comprehensive Example
 
-This example shows the application-facing DSL methods together. The workflow classes are ordinary `Workflow<I, O>` implementations; side-effect workflows are `Workflow<I, I>` steps.
+This example shows the pipeline methods together. Each method returns a new `Pipeline` whose state type is the output of the last step, so the compiler checks that every step accepts the previous step's output.
 
 ```kotlin
 val registerUser: UseCase<RegisterUserCommand, RegisterUserError, UserDto> =
-  useCase(
-    name = "RegisterUser",
-    errors = ::toRegisterUserError,
-  ) {
+  useCase(name = "RegisterUser", errors = ::toRegisterUserError) {
     startWith { command ->
-      if (command.email.isBlank()) {
-        Either.Left(WorkflowError.ValidationError("Email is required"))
-      } else {
-        Either.Right(RegistrationDraft(command.email, command.password))
+      ensure(command.email.isNotBlank()) { WorkflowError.ValidationError("Email is required") }
+      RegistrationDraft(command.email, command.password)
+    }
+      .then(ValidateRegistration())                       // RegistrationDraft -> ValidRegistration
+      .thenIf(ApplyInviteCode()) { context[INVITE_CODE] != null } // ValidRegistration -> ValidRegistration
+      .parallel(RecordSignupAttempt(), PublishRegistrationStarted())
+      .parallelJoin(CreateUser(users), CreateUserProfile(profiles), policy = ParallelErrorPolicy.FailFast) { user, profile ->
+        RegisteredUser(id = user.id, email = email, profileId = profile.id) // `this` is the ValidRegistration
       }
-    }
-
-    then(ValidateRegistration())
-
-    thenIf(ApplyInviteCode()) { result ->
-      result.context.get(INVITE_CODE) != null
-    }
-
-    parallel<ValidRegistration> {
-      then(RecordSignupAttempt())
-      then(PublishRegistrationStarted())
-    }
-
-    parallelJoin(
-      CreateUser(users),
-      CreateUserProfile(profiles),
-      ParallelErrorPolicy.FailFast,
-    ) { user, profile ->
-      RegisteredUser(id = user.id, email = user.email, profileId = profile.id)
-    }
-
-    thenLaunch(SendWelcomeEmail(), timeout = Duration.ofSeconds(2))
-    awaitLaunched()
-
-    result(state<RegisteredUser>()) { state ->
-      UserDto(id = state.id, email = state.email)
-    }
-
-    logging {
-      success(state<RegisteredUser>()) { state ->
-        field("userId", state.id)
+      .thenLaunch(SendWelcomeEmail(), timeout = 2.seconds)
+      .awaitLaunched()
+      .result { user -> UserDto(id = user.id, email = user.email) }
+      .logging {
+        success { (user) -> field("userId", user.id) }
+        success { result -> field("eventId", result.events.lastEvent<UserRegisteredEvent>()?.id) }
+        failure { error ->
+          field("reason", error.reason)
+          field("retryable", error.retryable)
+        }
       }
-
-      success(event<UserRegisteredEvent>()) { event ->
-        field("eventId", event.id)
-      }
-
-      failure { error: RegisterUserError ->
-        field("reason", error.reason)
-        field("retryable", error.retryable)
-      }
-    }
   }
 ```
 
 The flow is:
 
-- `startWith` validates public input and creates the initial `WorkflowState`.
+- `startWith` validates public input and creates the initial state.
 - `then` runs the next state-transforming workflow.
-- `thenIf` runs a workflow only when the current `WorkflowResult` matches the predicate.
+- `thenIf` runs a workflow only when the predicate matches the current state.
 - `parallel` runs side-effect workflows concurrently and keeps the current state.
 - `parallelJoin` runs state-producing workflows concurrently and merges their outputs into a new state.
-- `thenLaunch` starts side-effect work without blocking the main chain; `awaitLaunched` later merges launched events/context.
-- `result(state<T>())` projects public output from the final state.
-- `logging` adds explicit, type-safe fields to the finish log without changing the use-case result.
+- `thenLaunch` starts side-effect work without blocking the main chain; `awaitLaunched` merges launched events and context.
+- `result { }` projects the public output from the final state, events, and context.
+- `logging { }` adds explicit fields to the finish log without changing the use case result.
 
-## `workflowUseCase`
+`ensure` and `ensureNotNull` are Arrow functions; import them from `arrow.core.raise`.
 
-Use `workflowUseCase` for lower-level code that needs workflow-native details:
-
-```kotlin
-val workflow: WorkflowUseCase<Input> =
-  workflowUseCase(name = "Example") {
-    startWith { input -> Either.Right(InitialState(input.id)) }
-    then(FirstWorkflow())
-  }
-
-val detailed: Either<WorkflowError, UseCaseResult<WorkflowState>> =
-  workflow.executeDetailed(input)
-```
-
-`WorkflowUseCase` also provides:
-
-| Method | Purpose |
-| --- | --- |
-| `executeDetailed(command, context)` | Return final state, all events, and context. |
-| `execute(command)` | Return emitted events only. |
-| `executeForState<S>(command, context)` | Return final state as `S`, or a composition error. |
-| `executeForEvent<E>(command, context)` | Return the last emitted event of type `E`, or a composition error. |
-| `executeProjected(command, context) { ... }` | Custom projection from detailed result. |
-
-Most application code should prefer `UseCase<I, E, O>` built with `useCase`.
-
-## DSL Methods
+## Pipeline Methods
 
 ### `startWith`
 
-Initializes the pipeline state from public input:
+Converts public input into the first workflow state:
 
 ```kotlin
-startWith { input: RegisterUserCommand ->
-  Either.Right(RegistrationDraft(input.email, input.password))
+startWith { command: RegisterUserCommand ->
+  ensure(command.email.isNotBlank()) { WorkflowError.ValidationError("Email is required") }
+  RegistrationDraft(command.email, command.password)
 }
 ```
 
-Rules:
-
-- Must be called exactly once.
-- Must be the first DSL method called.
-- Exceptions thrown by the mapper are converted to `WorkflowError.ExceptionError`.
+The block runs with an Arrow `Raise<WorkflowError>` receiver. Return the state directly, and fail with `ensure`, `ensureNotNull`, `raise`, or `bind()`. Exceptions thrown by the block become `WorkflowError.ExceptionError`.
 
 ### `then`
 
-Runs a workflow after the previous state is available:
+Runs a workflow on the current state. Its output becomes the new state:
 
 ```kotlin
-then(ValidateRegistration())
-then(CreateUser(users))
+.then(ValidateRegistration())
+.then(CreateUser(users))
 ```
 
-The workflow's input state type must match the current state type.
+The workflow must be a `Workflow<S, O>` where `S` is the current state type. A mismatch is a compile error.
 
 ### `thenIf`
 
-Runs a workflow only when a predicate matches the current result:
+Runs a workflow only when a predicate matches:
 
 ```kotlin
-thenIf(SendWelcomeEmail()) { result ->
-  result.context.get(FeatureFlags.SEND_WELCOME_EMAIL) == true
-}
+.thenIf(SendWelcomeEmail()) { user -> user.marketingOptIn && context[FeatureFlags.WELCOME_EMAIL] == true }
 ```
 
-Use this for business branching. Keep predicates small and side-effect free.
+The predicate receives the current state as its parameter and a `WorkflowResult<S>` as its receiver, so `state`, `events`, and `context` are available. Because the step may be skipped, it must be a `Workflow<S, S>`. Keep predicates small and side-effect free. Exceptions thrown by the predicate become `WorkflowError.ExceptionError`.
 
 ### `parallel`
 
-Runs independent side-effect workflows concurrently and preserves the current state:
+Runs side-effect workflows concurrently on the current state and keeps that state:
 
 ```kotlin
-parallel<PaidOrder> {
-  then(SendReceiptEmail())
-  then(PublishPaymentEvent())
-}
+.parallel(SendReceiptEmail(), PublishPaymentEvent())
+.parallel(SendReceiptEmail(), PublishPaymentEvent(), policy = ParallelErrorPolicy.FailFast)
 ```
 
-Use this when each branch is independent and the main state should not be replaced by branch output.
+Each workflow must accept `S`; its output is ignored. Events are merged in parameter order, and context from every branch is merged. A failing branch fails the use case.
 
 ### `parallelJoin`
 
-Runs independent state-producing workflows concurrently and merges their outputs into a new state:
+Runs state-producing workflows concurrently on the current state and merges their outputs into a new state:
 
 ```kotlin
-parallelJoin(
-  CalculateSubtotal(),
-  CalculateTax(),
-) { subtotal, tax ->
-  PricedOrder(subtotal.orderId, subtotal.amount, tax.amount)
+.parallelJoin(CalculateSubtotal(), CalculateTax()) { subtotal, tax ->
+  PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the current state
 }
 ```
 
-There are overloads for 2 through 8 workflows. The default `ParallelErrorPolicy.WaitAll` waits for every branch and returns the first error by parameter order. Use `ParallelErrorPolicy.FailFast` to cancel remaining branches on the first failure.
+There are overloads for 2 through 8 workflows. The current state is the receiver (`this`) of the merge block, so the new state can keep fields of the old one.
+
+`policy` is a named parameter that defaults to `ParallelErrorPolicy.WaitAll`, which waits for every branch and fails with the first error by parameter order. `ParallelErrorPolicy.FailFast` cancels the remaining branches on the first failure.
+
+`parallelJoin` is also a top-level function that returns a `Workflow<I, R>`. Use it to name a join or reuse it:
+
+```kotlin
+val priceOrder: Workflow<ValidatedOrder, PricedOrder> =
+  parallelJoin(CalculateSubtotal(), CalculateTax()) { subtotal, tax ->
+    PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the input
+  }
+
+startWith { command -> command.toValidatedOrder() }
+  .then(priceOrder)
+```
 
 ### `thenLaunch` And `awaitLaunched`
 
-`thenLaunch` starts side-effect work without waiting for it before the main chain continues:
+`thenLaunch` starts a side-effect workflow without waiting for it. The main chain continues with the same state:
 
 ```kotlin
-thenLaunch(SendAuditEvent())
-then(ContinueMainFlow())
-awaitLaunched()
+.thenLaunch(SendAuditEvent())
+.thenLaunch(SendWelcomeEmail(), timeout = 2.seconds)
+.then(ContinueMainFlow())
+.awaitLaunched()
 ```
 
-Use `thenLaunch(workflow, timeout = duration)` to bound launched side-effect work. Use `awaitLaunched()` if later steps or the final result need launched workflow events/context. Launched failures are captured in context and do not fail the main chain when awaited.
+`timeout` is a `kotlin.time.Duration?` and defaults to no timeout.
+
+`awaitLaunched()` waits for everything launched so far and merges its events and context. Use it when later steps or the result need them. Work that is still running when the pipeline ends is awaited and merged before `result { }` runs, so `awaitLaunched()` at the very end is not required.
+
+A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and `message`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
+
+Launched work runs inside the use case invocation. Cancelling the caller cancels it too.
 
 ## Result Projection
 
-### State Projection
-
-Use `state<T>()` when output comes from the final state:
+`result { }` is the last call in the pipeline. It projects the final state into the public output:
 
 ```kotlin
-result(state<RegisteredUser>()) { state ->
-  UserDto(state.id, state.email)
-}
+.result { user -> UserDto(user.id, user.email) }
 ```
 
-If the final state is not `T`, the use case returns `WorkflowError.CompositionError`.
+The block's receiver is a `ResultScope<S>`, which is an Arrow `Raise<WorkflowError>` and also exposes:
 
-### Event Projection
+| Member | Purpose |
+| --- | --- |
+| `events` | Every event emitted by the pipeline, in order. |
+| `context` | The final context. |
+| `result` | The final `WorkflowResult<S>` (state, events, context). |
+| `requireEvent<T>()` | The last event of type `T`, or raises `WorkflowError.CompositionError` when none was emitted. |
 
-Use `event<T>()` when output comes from the last emitted event of type `T`:
+Combine them as needed:
 
 ```kotlin
-result(event<UserRegisteredEvent>()) { event ->
-  event
+.result { order ->
+  OrderReceipt(order.id, order.total, events.lastEvent<ShipmentPrepared>()?.trackingNumber)
 }
+
+.result { requireEvent<UserRegisteredEvent>() }
 ```
 
-If no event of type `T` was emitted, the use case returns `WorkflowError.CompositionError`.
+Exceptions thrown by the block become `WorkflowError.ExceptionError`.
 
-### Custom Projection
+## Writing Workflows
 
-Use a custom projection when output needs a combination of state, events, or context:
+Implement `Workflow<I, O>` for a step with dependencies:
 
 ```kotlin
-result(
-  UseCaseResultProjection { result, useCaseName ->
-    result.requireState<RegisteredUser>(useCaseName).map { state ->
-      UserDto(state.id, state.email)
-    }
+class ReserveInventory(private val inventory: Inventory) : Workflow<ValidatedOrder, ReservedOrder> {
+  override val id = "reserve-inventory"
+
+  override suspend fun WorkflowStepScope.execute(input: ValidatedOrder): ReservedOrder {
+    val reservation = ensureNotNull(inventory.reserve(input.items)) { OrderError.OutOfStock }
+    emit(InventoryReserved(input.orderId, reservation.id))
+    return ReservedOrder(input, reservation)
   }
-)
+}
 ```
 
-Exceptions thrown by projection mappers are converted to `WorkflowError.ExceptionError`.
+Use the `workflow` function for a step that needs no class of its own:
+
+```kotlin
+val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+  ensure(draft.items.isNotEmpty()) { WorkflowError.ValidationError("Order has no items") }
+  emit(OrderValidated(draft.orderId))
+  ValidatedOrder(draft.orderId, draft.items)
+}
+```
+
+`id` is a stable identifier used in execution history, logs, and summaries.
+
+`WorkflowStepScope` is an Arrow `Raise<WorkflowError>`. It also provides:
+
+| Member | Purpose |
+| --- | --- |
+| `context` | The context as earlier steps left it, plus anything this step has `put`. |
+| `emit(event)` | Records a domain event. |
+| `put(key, value)` | Adds typed data to the context seen by later steps. |
+
+These members are safe to call from coroutines launched inside the step. Exceptions thrown by a step become `WorkflowError.ExceptionError`.
+
+### Running A Step On Its Own
+
+Call a workflow directly to unit-test it:
+
+```kotlin
+val result: Either<WorkflowError, WorkflowResult<ValidatedOrder>> =
+  validateOrder(OrderDraft(orderId, items), WorkflowContext())
+```
+
+The context argument is optional. The `WorkflowResult` holds the new `state`, the `events` the step emitted, and the `context` it produced.
 
 ## Error Handling
 
-`WorkflowError` is the workflow-native error model:
+`WorkflowError` is an open interface with two properties:
+
+| Property | Purpose |
+| --- | --- |
+| `code` | Stable, non-sensitive identifier used in logs and summaries. Defaults to the class name. |
+| `message` | Human-readable description. May contain user data. Defaults to `code`. |
+
+The library's own errors are nested in it:
 
 | Error | Use for |
 | --- | --- |
-| `ValidationError` | Input or state validation failure. |
-| `ExecutionError` | Expected technical failure while running a step. |
-| `DomainError` | Domain-specific failure with a stable code and optional metadata. |
-| `ExceptionError` | Unexpected exception captured by the library. |
-| `CompositionError` | Invalid workflow composition or missing projected state/event. |
-| `ExecutionContextError` | A workflow failure with workflow execution metadata attached. |
-| `ChainError` | Failure wrapped at the chain level. |
+| `ValidationError(message)` | Input or state validation failure. |
+| `ExecutionError(message)` | Expected technical failure while running a step. Also used for `thenLaunch` timeouts. |
+| `DomainError(code, message, metadata)` | Business rule failure with a stable code and optional metadata. |
+| `ExceptionError(message, ex)` | Exception thrown by a step, `startWith`, a predicate, or `result { }`. |
+| `CompositionError(message)` | A use case that cannot produce its result, such as a missing event in `requireEvent`. |
 
-Workflow execution short-circuits on failure. Later steps do not run after an `Either.Left`.
-
-Map errors at the public boundary:
+Applications can implement `WorkflowError` with their own sealed types and raise them from steps:
 
 ```kotlin
-useCase(
-  name = "RegisterUser",
-  errors = { error -> error.toApplicationError() },
-) {
-  // ...
+sealed interface OrderError : WorkflowError {
+  data object EmptyOrder : OrderError
+  data class PaymentDeclined(val reason: String) : OrderError
 }
 ```
 
-The `errors` mapper should be total and non-throwing. If it throws, that exception is not converted into `Either`.
+Errors are not wrapped. The `errors` mapper receives the error exactly as it was raised, so you can match on your own types:
+
+```kotlin
+private fun toApiError(error: WorkflowError): ApiError =
+  when (error) {
+    OrderError.EmptyOrder -> ApiError(400, "empty-order")
+    is OrderError.PaymentDeclined -> ApiError(402, "payment-declined")
+    is WorkflowError.ValidationError -> ApiError(400, "invalid")
+    else -> ApiError(500, "internal")
+  }
+```
+
+Execution short-circuits on failure. Later steps do not run after a step raises.
+
+The `errors` mapper should be total and non-throwing. If it throws, that exception propagates to the caller.
 
 ## Workflow Context
 
-`WorkflowContext` carries metadata and execution history through the chain. Prefer typed keys:
+`WorkflowContext` is immutable, typed metadata that flows through the use case. Values are stored under `Key<T>`. Keys compare by identity, so declare each key once and share it:
 
 ```kotlin
-val tenantId = Key.string("tenantId")
-
-val context =
-  WorkflowContext()
-    .addData(WorkflowContext.CORRELATION_ID, "corr-123")
-    .addData(tenantId, "tenant-a")
-
-val result = useCase(input, context)
+object Keys {
+  val TENANT = Key<TenantId>("tenant")
+  val FLAGS = Key<Set<String>>("flags")
+}
 ```
 
-Inside a workflow:
+The name is diagnostic only. Because the value type lives in the type parameter, generic types such as `Set<String>` keep their full type.
+
+Build and read a context:
 
 ```kotlin
-val correlationId = context.get(WorkflowContext.CORRELATION_ID)
+val context = WorkflowContext.of(
+  WorkflowContext.CORRELATION_ID to "corr-123",
+  Keys.TENANT to TenantId("tenant-a"),
+)
+
+val tenant: TenantId? = context[Keys.TENANT]
+val withFlags = context.with(Keys.FLAGS, setOf("beta"))
+val merged = context + otherContext // `otherContext` wins on conflicts
+val hasTenant = Keys.TENANT in context
 ```
+
+Inside a step, read `context[key]` and add values with `put(key, value)`.
+
+Built-in keys:
+
+| Key | Value |
+| --- | --- |
+| `WorkflowContext.CORRELATION_ID` | `Key<String>`. Reported in `UseCaseSummary.correlationId`. |
+| `WorkflowContext.LAUNCHED_FAILURES` | `Key<List<String>>`. Messages for launched side effects that failed or timed out. |
 
 Keep context values operational. Avoid storing domain payloads or sensitive data in context just to make them easy to reach.
 
 ## Logging And Summaries
 
-`WorkflowUseCase` emits debug-level SLF4J logs before and after execution:
+Use cases emit debug-level SLF4J logs before and after execution, on the `io.liquidsoftware.workflow.UseCase` logger:
 
 ```text
 UseCase invocation started name=RegisterUser
@@ -338,16 +371,17 @@ Logged fields are intentionally limited to operational metadata:
 - event count
 - workflow count
 
-The library does not log command input, state, event payloads, projected output, or error messages.
+The library does not log input, state, event payloads, output, or error messages.
 
 ## Use Case Logging DSL
 
-Global logging configuration controls common formatting and should be set once at application startup before invoking use cases:
+Global configuration should be set once at application startup before invoking use cases:
 
 ```kotlin
 useCaseLoggingGlobalConfig {
   outcomeStyle(OutcomeStyle.Plain)
   defaultSummaryFields(DefaultSummaryFields.Enabled)
+  onSummary { summary -> metrics.record(summary) }
 }
 ```
 
@@ -357,43 +391,52 @@ Options:
 | --- | --- | --- |
 | `outcomeStyle` | `OutcomeStyle.Plain`, `OutcomeStyle.AnsiColor` | `OutcomeStyle.Plain` |
 | `defaultSummaryFields` | `DefaultSummaryFields.Enabled`, `DefaultSummaryFields.Disabled` | `DefaultSummaryFields.Enabled` |
+| `onSummary` | `(UseCaseSummary) -> Unit` | none |
+
+`onSummary` adds a listener that is called with a `UseCaseSummary` after every use case invocation, whatever the log level. Each call adds another listener; `clearSummaryListeners()` removes them all. Listeners run on the caller's coroutine; exceptions they throw are logged and ignored.
 
 Log fields render as stable `key=value` pairs.
 
-Per-use-case logging fields are explicit:
+Per-use-case logging fields are explicit. Chain `.logging { }` after `result { }`:
 
 ```kotlin
-logging {
-  success(state<RegisteredUser>()) { state ->
-    field("userId", state.id)
-  }
-
-  success(event<UserRegisteredEvent>()) { event ->
-    field("eventId", event.id)
-  }
-
-  failure { error: RegisterUserError ->
-    field("reason", error.reason)
-  }
+.result { user -> user.toDto() }
+.logging {
+  success { result -> field("userId", result.state.id) }
+  success { (_, _, context) -> field("tenant", context[Keys.TENANT]) }
+  failure { error -> field("reason", error.reason) }
 }
 ```
 
-The library never logs whole commands, states, events, outputs, or errors by default. Log only stable fields that are safe for your runtime environment.
-Explicit fields cannot use the reserved built-in names `name`, `outcome`, `durationMs`, `events`, or `workflows`. Invalid logging fields and thrown logging lambdas are reported as logging projection failures and do not change the use-case result.
+- `success` receives the final `WorkflowResult<S>` (state, events, context) and can be added more than once.
+- `failure` receives the mapped public error `E` and can be set once.
 
-`toSummary(...)` can build structured logging or metrics summaries:
+Fields are only collected when debug logging is enabled, so field blocks cost nothing otherwise.
+
+The library never logs whole inputs, states, events, outputs, or errors by default. Log only stable fields that are safe for your runtime environment.
+Explicit fields cannot be blank or use the reserved built-in names `name`, `outcome`, `durationMs`, `events`, or `workflows`. Invalid fields and thrown logging lambdas are reported as logging projection failures and do not change the use case result.
+
+### `UseCaseSummary`
+
+| Property | Purpose |
+| --- | --- |
+| `useCaseName` | The configured name. |
+| `succeeded` | Whether the invocation succeeded. |
+| `duration` | Total duration. |
+| `eventsCount` | Number of events emitted, including on failure (events from steps that completed before the failure, and launched failures). |
+| `executions` | `WorkflowExecution`s for every step run, including parallel and launched ones. |
+| `rootError` | `RootErrorInfo` for a failed invocation, otherwise `null`. |
+| `launchedFailures` | Messages from `WorkflowContext.LAUNCHED_FAILURES`. |
+| `correlationId` | Value of `WorkflowContext.CORRELATION_ID`, if set. |
+
+`RootErrorInfo` has the error's `type` (class name), `code`, `message`, and the `workflowId` of the failing step when the failure came from a step. Launched side effects never count as the failing step.
+
+Error messages are redacted by default because they may contain user data, so `rootError.message` is `null`. Use `withErrorMessages()` to get a copy that includes it:
 
 ```kotlin
-val summary = detailedResult.toSummary(useCaseName = "RegisterUser")
+useCaseLoggingGlobalConfig {
+  onSummary { summary -> log.info(summary.withErrorMessages().toString()) }
+}
 ```
 
-Error messages are redacted by default because they may contain user data:
-
-```kotlin
-val summary = detailedResult.toSummary(
-  useCaseName = "RegisterUser",
-  includeErrorMessages = false,
-)
-```
-
-Only set `includeErrorMessages = true` when those values are known to be safe for your environment.
+Only use `withErrorMessages()` when those messages are known to be safe for your environment.

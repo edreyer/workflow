@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.0 - Unreleased
+
+Breaking release. See [Migrating to v0.9.0 Typed Pipelines](docs/migrations/0.9.0-typed-pipelines.md) for before/after examples of every change.
+
+- Type-safe pipelines: `startWith { }` returns a `Pipeline<I, E, S>`, and `.then`, `.thenIf`, `.parallel`, `.parallelJoin`, `.thenLaunch`, `.awaitLaunched` and `.result` are chained on it. A step that does not accept the current state, or a missing `.result`, is now a compile error instead of a runtime `CompositionError`.
+- `Workflow<I, O>` is an interface with a single `suspend fun WorkflowStepScope.execute(input: I): O`. Steps return their state and fail through Arrow's `Raise` (`ensure`, `raise`, `bind()`), emit events with `emit`, and add context with `put`. `workflow(id) { }` builds a step from a lambda. Run a step on its own with `step(input, context)`.
+- `startWith` and `.result` blocks are `Raise` scopes too. `.result` receives the typed final state, with `events`, `context`, the full `result`, and `requireEvent<T>()` in scope. This replaces `state<T>()`, `event<T>()` and `UseCaseResultProjection`.
+- Errors are no longer wrapped: `ExecutionContextError` and `ChainError` are removed, and mappers receive the raised error. `WorkflowError` is an open interface with `code` and `message`, so applications can raise their own sealed error types. `rootCause()` is deprecated and returns the error unchanged. `CompositionError` no longer carries an exception.
+- `parallelJoin` merge functions receive the current state as `this`. The error policy is a named parameter that defaults to `WaitAll`.
+- `.parallel(a, b)` replaces `parallel<S> { then(a); then(b) }`. Side-effect steps may return any type.
+- Launched work still pending at the end of the pipeline is awaited and merged before `.result`, so its events and failures are no longer dropped. `thenLaunch` takes a `kotlin.time.Duration` timeout.
+- `WorkflowContext` uses identity-based `Key<T>("name")` keys that keep generic types; `context[key]`, `with`, `plus` and `WorkflowContext.of(...)` replace `addData`, `get`, `combine` and the string-keyed API. Execution history moved out of the context into `UseCaseSummary.executions`.
+- `workflowUseCase`, `WorkflowUseCase`, `UseCaseResult`, `UseCaseEvents` and the `execute*` methods are removed; `useCase` with `.result { }` covers each case.
+- Per-use-case logging is chained after `.result` and typed to the final `WorkflowResult<S>` and the mapped error.
+- `toSummary` is replaced by `useCaseLoggingGlobalConfig { onSummary { summary -> } }`. `UseCaseSummary.duration` is a monotonic `kotlin.time.Duration`, `RootErrorInfo` gains `code`, and `withErrorMessages()` replaces `includeErrorMessages`. `WorkflowExecution` gains a monotonic `duration`.
+- `UseCaseCommand` and `WorkflowState` are deprecated and no longer required. Any type can be input or state.
+- Removed the `kotlin-reflect` dependency and reflective input-type discovery (`WorkflowUtils`, `Workflow.inputClass`).
+- Enabled explicit API mode and Kotlin ABI validation (`api/workflow.api`).
+- Tests use `kotlinx-coroutines-test`; the unused kotest dependencies were removed.
+
 ## Unreleased
 
 - Published artifacts now target Java 17 (bytecode and Gradle `org.gradle.jvm.version` metadata). 0.8.0 declared Java 25, so Gradle projects on Java 17 or 21 could not resolve it. The build itself still uses the JDK 25 toolchain.
