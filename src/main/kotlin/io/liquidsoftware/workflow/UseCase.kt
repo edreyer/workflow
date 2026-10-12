@@ -325,7 +325,7 @@ private class ParallelSideEffectStep(
   private val workflows = workflows.map { it.untyped() }
 
   override suspend fun Raise<WorkflowError>.execute(state: Any?, run: PipelineRun): Any? {
-    runBranches(workflows, state, run.context, run.recorder, policy).bind().forEach(run::absorb)
+    runBranches(workflows, state, run.context, run.recorder, policy, run::absorb).bind()
     return state
   }
 }

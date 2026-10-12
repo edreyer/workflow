@@ -121,33 +121,55 @@ private class LambdaWorkflow<I, O>(
   override suspend fun WorkflowStepScope.execute(input: I): O = block(input)
 }
 
-/** Collects the [WorkflowExecution]s of one use case run, including nested and launched steps. */
+/**
+ * Collects the [WorkflowExecution]s of one use case run, including nested and launched steps, and
+ * remembers which step raised each error.
+ *
+ * Parallel branches get child recorders so the step behind the error a join selects can be
+ * attributed even when several branches fail, or fail with the same error instance.
+ */
 internal class ExecutionRecorder private constructor(
-  private val root: ExecutionRecorder?,
+  private val parent: ExecutionRecorder?,
   private val launched: Boolean,
 ) {
   constructor() : this(null, false)
 
-  private val lock = Any()
+  private val root: ExecutionRecorder = parent?.root ?: this
   private val executions = mutableListOf<WorkflowExecution>()
   private val failedStepIds = java.util.IdentityHashMap<WorkflowError, String>()
 
   /** A recorder for launched side effects: their executions are kept, but never count as the failing step. */
-  fun forLaunched(): ExecutionRecorder = ExecutionRecorder(root ?: this, launched = true)
+  fun forLaunched(): ExecutionRecorder = ExecutionRecorder(this, launched = true)
+
+  /** A recorder for one parallel branch. */
+  fun forBranch(): ExecutionRecorder = ExecutionRecorder(this, launched)
 
   fun record(execution: WorkflowExecution, error: WorkflowError?) {
-    val target = root ?: this
-    synchronized(target.lock) {
-      target.executions += execution
+    synchronized(root) {
+      root.executions += execution
       // The innermost step records an error first; enclosing steps that pass it on keep that id.
-      if (!launched && error != null) target.failedStepIds.putIfAbsent(error, execution.workflowId)
+      if (!launched && error != null) forEachLevel { it.failedStepIds.putIfAbsent(error, execution.workflowId) }
     }
   }
 
-  fun snapshot(): List<WorkflowExecution> = synchronized(lock) { executions.toList() }
+  /** Marks [stepId] as the step behind [error], replacing what completion order recorded. */
+  fun attribute(error: WorkflowError, stepId: String?) {
+    if (launched || stepId == null) return
+    synchronized(root) { forEachLevel { it.failedStepIds[error] = stepId } }
+  }
+
+  fun snapshot(): List<WorkflowExecution> = synchronized(root) { root.executions.toList() }
 
   /** The id of the main-pipeline step that raised [error], or `null` if no step raised it. */
-  fun failedStepId(error: WorkflowError): String? = synchronized(lock) { failedStepIds[error] }
+  fun failedStepId(error: WorkflowError): String? = synchronized(root) { failedStepIds[error] }
+
+  private inline fun forEachLevel(action: (ExecutionRecorder) -> Unit) {
+    var level: ExecutionRecorder? = this
+    while (level != null) {
+      action(level)
+      level = level.parent
+    }
+  }
 }
 
 internal val Workflow<*, *>.executionName: String

@@ -101,6 +101,45 @@ class UseCaseSummaryTest {
     assertEquals(RootErrorInfo("DomainError", "slow", null, "slow-failure"), summaries.single().rootError)
   }
 
+  data object Shared : WorkflowError
+
+  @Test
+  fun `failure summary names the selected branch when branches raise the same error instance`() = runTest {
+    val slow = workflow<Input, Int>("slow-shared") {
+      delay(50)
+      raise(Shared)
+    }
+    val fast = workflow<Input, Int>("fast-shared") { raise(Shared) }
+    val sharedFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "SharedFailures") {
+      startWith { it }
+        .parallelJoin(slow, fast) { a, b -> a + b }
+        .result { it }
+    }
+
+    sharedFailures(Input(1))
+
+    assertEquals("slow-shared", summaries.single().rootError?.workflowId)
+  }
+
+  @Test
+  fun `failure summary keeps events from parallel branches that succeeded`() = runTest {
+    val emitting = workflow<Input, Unit>("emitting") { emit(Done(it.value)) }
+    val failing = workflow<Input, Unit>("failing") {
+      delay(10)
+      raise(WorkflowError.ExecutionError("down"))
+    }
+    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "Partial") {
+      startWith { it }
+        .parallel(emitting, failing)
+        .result { it.value }
+    }
+
+    partial(Input(1))
+
+    assertEquals(1, summaries.single().eventsCount)
+    assertEquals("failing", summaries.single().rootError?.workflowId)
+  }
+
   @Test
   fun `failure outside any step names no step`() = runTest {
     val rejecting: UseCase<Input, WorkflowError, Int> = useCase(name = "Rejecting") {

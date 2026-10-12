@@ -132,15 +132,15 @@ private class ParallelJoinWorkflow<I, R>(
   override val id: String = "parallelJoin(${workflows.joinToString(",") { it.id }})"
 
   override suspend fun WorkflowStepScope.execute(input: I): R {
-    val results = runBranches(workflows, input, context, recorder, policy).bind()
-    results.forEach(::absorb)
+    val results = runBranches(workflows, input, context, recorder, policy) { absorb(it) }.bind()
     return merge(input, results.map { it.state })
   }
 }
 
 /**
- * Runs [workflows] concurrently on [input]. Each branch sees [context]; the returned results keep
- * branch order.
+ * Runs [workflows] concurrently on [input]. Each branch sees [context]. Every branch that succeeds
+ * is passed to [absorb], even when another branch fails, so its events and context are not lost.
+ * The returned results keep branch order.
  */
 internal suspend fun <I> runBranches(
   workflows: List<Workflow<I, Any?>>,
@@ -148,30 +148,35 @@ internal suspend fun <I> runBranches(
   context: WorkflowContext,
   recorder: ExecutionRecorder,
   policy: ParallelErrorPolicy,
+  absorb: (WorkflowResult<Any?>) -> Unit,
 ): Either<WorkflowError, List<WorkflowResult<Any?>>> = coroutineScope {
-  val deferreds = workflows.map { workflow -> async { workflow.runStep(input, context, recorder) } }
-  when (policy) {
-    ParallelErrorPolicy.WaitAll -> firstErrorOrValues(deferreds.awaitAll())
+  val branchRecorders = workflows.map { recorder.forBranch() }
+  val deferreds = workflows.mapIndexed { index, workflow ->
+    async { workflow.runStep(input, context, branchRecorders[index]) }
+  }
+  val outcomes = when (policy) {
+    ParallelErrorPolicy.WaitAll -> deferreds.awaitAll()
     ParallelErrorPolicy.FailFast -> failFast(deferreds)
   }
-}
-
-private fun firstErrorOrValues(
-  results: List<Either<WorkflowError, WorkflowResult<Any?>>>,
-): Either<WorkflowError, List<WorkflowResult<Any?>>> {
-  val values = ArrayList<WorkflowResult<Any?>>(results.size)
-  for (result in results) {
-    when (result) {
-      is Either.Left -> return result
-      is Either.Right -> values += result.value
-    }
+  outcomes.forEach { outcome -> outcome?.onRight(absorb) }
+  // The first failure by parameter order wins.
+  val failed = outcomes.indexOfFirst { it is Either.Left }
+  if (failed >= 0) {
+    val error = (outcomes[failed] as Either.Left).value
+    recorder.attribute(error, branchRecorders[failed].failedStepId(error))
+    Either.Left(error)
+  } else {
+    Either.Right(outcomes.map { (it as Either.Right).value })
   }
-  return Either.Right(values)
 }
 
+/**
+ * Waits for the branches until one fails, then cancels the rest. Cancelled branches have a `null`
+ * outcome.
+ */
 private suspend fun failFast(
   deferreds: List<Deferred<Either<WorkflowError, WorkflowResult<Any?>>>>,
-): Either<WorkflowError, List<WorkflowResult<Any?>>> {
+): List<Either<WorkflowError, WorkflowResult<Any?>>?> {
   val pending = deferreds.toMutableSet()
   while (pending.isNotEmpty()) {
     val (completed, result) = select {
@@ -181,14 +186,8 @@ private suspend fun failFast(
     if (result is Either.Left) {
       pending.forEach { it.cancel() }
       pending.joinAll()
-      // Report the earliest failing branch by parameter order among those that finished.
-      val earliest = deferreds
-        .filter { it.isCompleted && !it.isCancelled }
-        .map { it.await() }
-        .filterIsInstance<Either.Left<WorkflowError>>()
-        .firstOrNull()
-      return earliest ?: result
+      break
     }
   }
-  return firstErrorOrValues(deferreds.map { it.await() })
+  return deferreds.map { if (it.isCompleted && !it.isCancelled) it.await() else null }
 }
