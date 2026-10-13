@@ -56,6 +56,9 @@ class ReadmeExampleTest {
         .result { user -> UserDto(user.id, user.email) }
     }
 
+  class RegisterUserUseCase(users: UserRepository) :
+    UseCase<RegisterUser, ApiError, UserDto> by ReadmeExampleTest().registerUser(users)
+
   @Test
   fun `readme example`() = runTest {
     val users = UserRepository()
@@ -64,5 +67,14 @@ class ReadmeExampleTest {
     assertIs<Either.Right<UserDto>>(register(RegisterUser("person@example.com", "pw")))
     assertEquals(Either.Left(ApiError(409, "email-taken")), register(RegisterUser("person@example.com", "pw")))
     assertEquals(Either.Left(ApiError(400, "invalid")), register(RegisterUser("", "pw")))
+  }
+
+  @Test
+  fun `use case class delegates to the built use case`() = runTest {
+    val register: UseCase<RegisterUser, ApiError, UserDto> = RegisterUserUseCase(UserRepository())
+    assertIs<Either.Right<UserDto>>(register(RegisterUser("person@example.com", "pw")))
+
+    val fake = UseCase<RegisterUser, ApiError, UserDto> { _, _ -> Either.Left(ApiError(503, "unavailable")) }
+    assertEquals(Either.Left(ApiError(503, "unavailable")), fake(RegisterUser("person@example.com", "pw")))
   }
 }
