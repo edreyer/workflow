@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Breaking. See [Migrating to v0.10.0](docs/migrations/0.10.0.md).
+
+- Steps are functions. `Workflow` is now a class the library builds, so users no longer implement it or override `WorkflowStepScope.execute`. Write business logic as ordinary functions (with `context(_: Raise<E>)` when they can fail) and wire them in with `workflow(id) { }` or the new inline `Pipeline.then(id) { }`.
+- Added `Pipeline.guard(id) { }`, an inline pass-through check.
+- `WorkflowExecution.workflowName` is always the step `id`. It used to be the class name for class-based steps.
+
 ## 0.9.1 - 2026-10-13
 
 - Arrow (`arrow-core` and the `arrow-stack` platform) is now an `api` dependency. `Either` and `Raise` are part of the public API, but 0.9.0 published Arrow with `runtime` scope, so a consumer that did not declare Arrow itself could not compile against the library.

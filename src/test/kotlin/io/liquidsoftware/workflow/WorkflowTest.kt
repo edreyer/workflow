@@ -1,7 +1,8 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
-import arrow.core.raise.ensure
+import arrow.core.raise.Raise
+import arrow.core.raise.context.ensure
 import arrow.core.raise.ensureNotNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -23,19 +24,22 @@ class WorkflowTest {
 
   private val discount = Key<Int>("discount")
 
-  class ValidateDraft : Workflow<Draft, Validated> {
-    override val id = "validate-draft"
-
-    override suspend fun WorkflowStepScope.execute(input: Draft): Validated {
-      ensure(input.quantity > 0) { OrderError.EmptyOrder }
-      emit(DraftValidated(input.quantity))
-      return Validated(input.quantity)
+  /** Domain code with no dependency on this library. */
+  class DraftValidator {
+    context(_: Raise<OrderError>)
+    fun validate(draft: Draft): Validated {
+      ensure(draft.quantity > 0) { OrderError.EmptyOrder }
+      return Validated(draft.quantity)
     }
   }
 
+  private val validateDraft = workflow<Draft, Validated>("validate-draft") { draft ->
+    DraftValidator().validate(draft).also { emit(DraftValidated(it.quantity)) }
+  }
+
   @Test
-  fun `class workflow returns state and events`() = runTest {
-    val result = ValidateDraft()(Draft(2))
+  fun `workflow calling a domain function returns state and events`() = runTest {
+    val result = validateDraft(Draft(2))
 
     val value = assertIs<Either.Right<WorkflowResult<Validated>>>(result).value
     assertEquals(Validated(2), value.state)
@@ -44,7 +48,7 @@ class WorkflowTest {
 
   @Test
   fun `raised application errors are returned unwrapped`() = runTest {
-    assertEquals(Either.Left(OrderError.EmptyOrder), ValidateDraft()(Draft(0)))
+    assertEquals(Either.Left(OrderError.EmptyOrder), validateDraft(Draft(0)))
   }
 
   @Test

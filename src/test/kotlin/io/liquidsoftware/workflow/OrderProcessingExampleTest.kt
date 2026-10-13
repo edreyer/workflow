@@ -1,7 +1,8 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
-import arrow.core.raise.ensure
+import arrow.core.raise.Raise
+import arrow.core.raise.context.ensure
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import java.util.UUID
@@ -62,25 +63,32 @@ class OrderProcessingExampleTest {
     Tax(order.items.sumOf { it.quantity * it.price } * 0.08)
   }
 
-  class CheckInventory : Workflow<PricedOrder, PricedOrder> {
-    override val id = "check-inventory"
-
-    override suspend fun WorkflowStepScope.execute(input: PricedOrder): PricedOrder {
+  // Domain services: plain Kotlin and Arrow, with no dependency on this library.
+  class InventoryService {
+    suspend fun isAvailable(order: PricedOrder): Boolean {
       delay(100) // inventory service call
-      put(Keys.INVENTORY_AVAILABLE, true)
-      return input
+      return order.order.items.isNotEmpty()
     }
   }
 
-  class CapturePayment : Workflow<PricedOrder, PricedOrder> {
-    override val id = "capture-payment"
-
-    override suspend fun WorkflowStepScope.execute(input: PricedOrder): PricedOrder {
+  class PaymentService {
+    context(_: Raise<OrderError>)
+    suspend fun capture(order: PricedOrder): Double {
       delay(150) // payment gateway call
-      ensure(input.order.paymentToken != "declined") { OrderError.PaymentDeclined("card declined") }
-      emit(PaymentCaptured(input.order.orderId, input.total))
-      return input
+      ensure(order.order.paymentToken != "declined") { OrderError.PaymentDeclined("card declined") }
+      return order.total
     }
+  }
+
+  private val inventory = InventoryService()
+  private val payments = PaymentService()
+
+  private val checkInventory = workflow<PricedOrder, Unit>("check-inventory") { order ->
+    put(Keys.INVENTORY_AVAILABLE, inventory.isAvailable(order))
+  }
+
+  private val capturePayment = workflow<PricedOrder, Unit>("capture-payment") { order ->
+    emit(PaymentCaptured(order.order.orderId, payments.capture(order)))
   }
 
   private val prepareShipment = workflow<PricedOrder, PricedOrder>("prepare-shipment") { order ->
@@ -108,7 +116,7 @@ class OrderProcessingExampleTest {
         .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
           PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the ValidatedOrder
         }
-        .parallel(CheckInventory(), CapturePayment())
+        .parallel(checkInventory, capturePayment)
         .thenIf(prepareShipment) { context[Keys.INVENTORY_AVAILABLE] == true }
         .thenLaunch(sendConfirmation)
         .result { order ->

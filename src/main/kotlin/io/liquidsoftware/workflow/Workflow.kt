@@ -18,36 +18,40 @@ import kotlin.time.TimeSource
 public annotation class WorkflowDsl
 
 /**
- * One focused step of a use case: it turns input state [I] into output state [O].
+ * One named step of a use case: it turns input state [I] into output state [O].
  *
- * [execute] runs inside a [WorkflowStepScope], which is an Arrow [Raise] for [WorkflowError]. Fail
- * with `ensure`, `ensureNotNull`, `raise`, or `bind()`; record events with
- * [WorkflowStepScope.emit]; add context data with [WorkflowStepScope.put]. Thrown exceptions become
- * [WorkflowError.ExceptionError].
+ * Steps are written as functions, not classes. Define one inline with `Pipeline.then(id) { }`, or
+ * as a reusable value with the [workflow] function. The step block runs inside a
+ * [WorkflowStepScope], which is an Arrow [Raise] for [WorkflowError]. Fail with `ensure`,
+ * `ensureNotNull`, `raise`, or `bind()`; record events with [WorkflowStepScope.emit]; add context
+ * data with [WorkflowStepScope.put]. Thrown exceptions become [WorkflowError.ExceptionError].
+ *
+ * Domain code does not need this library. A function that declares `context(_: Raise<OrderError>)`
+ * can be called from any step block:
  *
  * ```kotlin
- * class ReserveInventory(private val inventory: Inventory) : Workflow<ValidatedOrder, ReservedOrder> {
- *   override val id = "reserve-inventory"
+ * class Inventory {
+ *   context(_: Raise<OrderError>)
+ *   suspend fun reserve(order: ValidatedOrder): ReservedOrder = ...
+ * }
  *
- *   override suspend fun WorkflowStepScope.execute(input: ValidatedOrder): ReservedOrder {
- *     val reservation = ensureNotNull(inventory.reserve(input.items)) { OrderError.OutOfStock }
- *     emit(InventoryReserved(input.orderId, reservation.id))
- *     return ReservedOrder(input, reservation)
- *   }
+ * val reserveInventory = workflow<ValidatedOrder, ReservedOrder>("reserve-inventory") { order ->
+ *   inventory.reserve(order)
  * }
  * ```
- *
- * For a step that needs no class of its own, use the [workflow] function.
  */
-public interface Workflow<in I, out O> {
+public class Workflow<in I, out O> internal constructor(
   /** Stable identifier used in execution history, logs, and summaries. */
-  public val id: String
+  public val id: String,
+  private val block: suspend WorkflowStepScope.(input: I) -> O,
+) {
+  internal suspend fun WorkflowStepScope.execute(input: I): O = block(input)
 
-  public suspend fun WorkflowStepScope.execute(input: I): O
+  override fun toString(): String = "Workflow($id)"
 }
 
 /**
- * Defines a [Workflow] from a lambda.
+ * Defines a reusable [Workflow]. For a step used in one pipeline only, prefer `Pipeline.then(id) { }`.
  *
  * ```kotlin
  * val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
@@ -62,7 +66,7 @@ public interface Workflow<in I, out O> {
 public fun <I, O> workflow(
   id: String,
   block: suspend WorkflowStepScope.(input: I) -> O,
-): Workflow<I, O> = LambdaWorkflow(id, block)
+): Workflow<I, O> = Workflow(id, block)
 
 /**
  * Defines a [Workflow] that checks its input and passes it on unchanged, such as an authorization
@@ -79,7 +83,7 @@ public fun <I, O> workflow(
 public fun <I> guard(
   id: String,
   block: suspend WorkflowStepScope.(input: I) -> Unit,
-): Workflow<I, I> = LambdaWorkflow(id) { input -> block(input); input }
+): Workflow<I, I> = Workflow(id) { input -> block(input); input }
 
 /**
  * Runs this workflow on its own and returns its new state, emitted events, and context.
@@ -134,13 +138,6 @@ public class WorkflowStepScope internal constructor(
     synchronized(lock) { WorkflowResult(state, events.toList(), currentContext) }
 }
 
-private class LambdaWorkflow<I, O>(
-  override val id: String,
-  private val block: suspend WorkflowStepScope.(I) -> O,
-) : Workflow<I, O> {
-  override suspend fun WorkflowStepScope.execute(input: I): O = block(input)
-}
-
 /**
  * Collects the [WorkflowExecution]s of one use case run, including nested and launched steps, and
  * remembers which step raised each error.
@@ -192,9 +189,6 @@ internal class ExecutionRecorder private constructor(
   }
 }
 
-internal val Workflow<*, *>.executionName: String
-  get() = if (this is LambdaWorkflow) id else this::class.simpleName ?: id
-
 /**
  * Runs this step, records its execution, and returns its result. When the step fails,
  * [onFailure] receives the events and context it collected before failing.
@@ -223,7 +217,7 @@ internal suspend fun <I, O> Workflow<I, O>.runStep(
   val duration = mark.elapsedNow()
   recorder.record(
     WorkflowExecution(
-      workflowName = executionName,
+      workflowName = id,
       workflowId = id,
       startTime = startTime,
       endTime = startTime.plusNanos(duration.inWholeNanoseconds),

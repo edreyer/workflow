@@ -103,6 +103,29 @@ public class Pipeline<I, E, S> internal constructor(
   public fun <O> then(workflow: Workflow<S, O>): Pipeline<I, E, O> = add(SequentialStep(workflow))
 
   /**
+   * Runs [step] on the current state; its output becomes the new state. The block is a
+   * [WorkflowStepScope], so it can fail with `ensure` or `raise`, call functions that declare
+   * `context(_: Raise<...>)`, and `emit` events.
+   *
+   * ```kotlin
+   * .then("capture-payment") { order -> payments.capture(order) }
+   * ```
+   *
+   * @param id Stable identifier used in execution history, logs, and summaries.
+   */
+  public fun <O> then(id: String, step: suspend WorkflowStepScope.(state: S) -> O): Pipeline<I, E, O> =
+    then(workflow(id, step))
+
+  /**
+   * Checks the current state and passes it on unchanged, such as an authorization check. Fail with
+   * `ensure` or `raise`.
+   *
+   * @param id Stable identifier used in execution history, logs, and summaries.
+   */
+  public fun guard(id: String, check: suspend WorkflowStepScope.(state: S) -> Unit): Pipeline<I, E, S> =
+    then(io.liquidsoftware.workflow.guard(id, check))
+
+  /**
    * Runs [workflow] only when [predicate] matches the current state. Because the step may be
    * skipped, it must keep the state type. The predicate's receiver gives access to the events and
    * context so far.
@@ -373,7 +396,7 @@ private class LaunchStep(
   private fun timedOut(startTime: Instant, timeout: Duration, recorder: ExecutionRecorder): Either<WorkflowError, Nothing> {
     val error = WorkflowError.ExecutionError("thenLaunch timeout: ${workflow.id}")
     val execution = WorkflowExecution(
-      workflowName = workflow.executionName,
+      workflowName = workflow.id,
       workflowId = workflow.id,
       startTime = startTime,
       endTime = startTime.plusNanos(timeout.inWholeNanoseconds),

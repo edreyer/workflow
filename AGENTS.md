@@ -117,10 +117,11 @@ Tests use `kotlin("test")` on JUnit 5 with `kotlinx-coroutines-test`
 
 ### Architecture
 
-- `Workflow.kt`: `Workflow<I, O>`, an interface with one member,
-  `suspend fun WorkflowStepScope.execute(input: I): O`. Its scope is an Arrow
-  `Raise<WorkflowError>` with `emit`, `put`, and `context`. Also defines
-  `workflow(id) { }` for lambda steps, `@WorkflowDsl`, step execution
+- `Workflow.kt`: `Workflow<I, O>`, a final class the library builds from an id
+  and a step lambda. Users never implement it: steps are functions, wired in with
+  `workflow(id) { }`, `guard(id) { }`, or inline `Pipeline.then(id) { }`. The
+  lambda's scope, `WorkflowStepScope`, is an Arrow `Raise<WorkflowError>` with
+  `emit`, `put`, and `context`. Also defines `@WorkflowDsl`, step execution
   (`runStep`), and the `ExecutionRecorder` that collects executions and
   attributes failures to steps.
 - `UseCase.kt`: `useCase { startWith { } ... .result { } }`. `Pipeline<I, E, S>`

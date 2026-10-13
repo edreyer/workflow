@@ -83,42 +83,40 @@ The important part is the shape:
 
 ## Defining Workflow Steps
 
-A step turns one state into the next. It runs inside a `WorkflowStepScope`, which is an Arrow `Raise<WorkflowError>`, so it returns its new state and fails with `ensure`, `ensureNotNull`, `raise`, or `bind()`. It can also `emit` domain events and `put` typed context data for later steps.
+Steps are functions. Write your business logic as ordinary Kotlin, and let the pipeline name each step where it wires it in:
 
-The lightest form is the `workflow` function:
+```kotlin
+class Payments(private val gateway: PaymentGateway) {
+  context(_: Raise<OrderError>)
+  suspend fun capture(order: PricedOrder): PaidOrder {
+    val receipt = gateway.capture(order.total) ?: raise(OrderError.PaymentDeclined("card declined"))
+    return PaidOrder(order, receipt)
+  }
+}
+
+startWith { command -> OrderDraft(command.orderId, command.items) }
+  .then("validate-order") { draft -> validator.validate(draft) }
+  .guard("authorize") { order -> ensure(order.customer.canOrder) { OrderError.NotAllowed } }
+  .then("capture-payment") { order ->
+    payments.capture(order).also { emit(PaymentCaptured(order.orderId, it.receipt.id)) }
+  }
+```
+
+`Payments` doesn't depend on this library. A function that can fail declares `context(_: Raise<OrderError>)`, which is plain Arrow, and you can test it with `either { payments.capture(order) }`. Inside a step block you can also `emit` domain events and `put` typed context data for later steps. `.guard` checks the state and passes it on unchanged.
+
+To name a step once and reuse it, or to pass it to `parallel`, `parallelJoin`, `thenIf` or `thenLaunch`, define it with `workflow`:
 
 ```kotlin
 val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
   ensure(draft.items.isNotEmpty()) { OrderError.EmptyOrder }
   emit(OrderValidated(draft.orderId))
-  put(Keys.PRIORITY, draft.isPriority)
   ValidatedOrder(draft.orderId, draft.items)
 }
 ```
 
-Use `guard` for a step that only checks its input, such as authorization, and passes it on unchanged:
+`guard<T>("id") { }` builds a reusable pass-through check the same way.
 
-```kotlin
-val authorize = guard<PlaceOrder>("authorize") { command ->
-  ensure(command.customer.canOrder) { OrderError.NotAllowed }
-}
-```
-
-Implement `Workflow<I, O>` when a step needs its own class, for example to inject dependencies:
-
-```kotlin
-class CapturePayment(private val gateway: PaymentGateway) : Workflow<PricedOrder, PaidOrder> {
-  override val id = "capture-payment"
-
-  override suspend fun WorkflowStepScope.execute(input: PricedOrder): PaidOrder {
-    val receipt = gateway.capture(input.total).bind()
-    emit(PaymentCaptured(input.orderId, receipt.id))
-    return PaidOrder(input, receipt)
-  }
-}
-```
-
-`ensure`, `ensureNotNull` and the other `Raise` helpers are imported from `arrow.core.raise`. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `WorkflowError.ExceptionError`. To unit-test a step, call it directly: `validateOrder(draft)` returns `Either<WorkflowError, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
+Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `WorkflowError.ExceptionError`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<WorkflowError, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
 
 ## Composing Steps
 
@@ -130,7 +128,7 @@ val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
       .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
         PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount)
       }
-      .parallel(CheckInventory(), CapturePayment())
+      .parallel(checkInventory, capturePayment)
       .thenIf(prepareShipment) { context[Keys.INVENTORY_AVAILABLE] == true }
       .thenLaunch(sendConfirmation)
       .result { order -> OrderReceipt(order.order.orderId, order.total) }
@@ -140,7 +138,9 @@ val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
 | Pipeline method | Use when |
 | --- | --- |
 | `startWith { input -> state }` | Convert public input into the first state. |
-| `.then(step)` | Run the next step. Its output becomes the new state. |
+| `.then("id") { state -> next }` | Run the next step, written inline. Its output becomes the new state. |
+| `.then(step)` | Run a reusable step defined with `workflow`. |
+| `.guard("id") { state -> }` | Check the state with `ensure` or `raise` and pass it on unchanged. |
 | `.thenIf(step) { state -> Boolean }` | Run a step only when the predicate matches. The step must keep the state type. |
 | `.parallel(a, b, ...)` | Run side-effect steps concurrently and keep the current state. |
 | `.parallelJoin(a, b, ...) { x, y -> state }` | Run 2 to 8 steps concurrently and merge their outputs into a new state. The current state is `this`. |
@@ -262,6 +262,7 @@ Requires Java 17 or later. Depends on Arrow `arrow-core`, `kotlinx-coroutines-co
 - [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md) explains the design problem this library addresses.
 - [Design Guidance](docs/design-guidance.md) covers when to use this library and how to structure workflows.
 - [Workflow Reference](docs/reference.md) covers every DSL method, errors, context, and logging.
+- [Migrating to v0.10.0](docs/migrations/0.10.0.md) (unreleased) covers the breaking changes on `main` so far.
 - [Migrating to v0.9.0 Typed Pipelines](docs/migrations/0.9.0-typed-pipelines.md) shows every breaking change with before and after examples.
 - [Migrating to v0.8.0 Use Case Logging](docs/migrations/0.8.0-use-case-logging.md) explains how to adopt the logging DSL.
 - [Migrating from v0.6.0 to v0.7.0](docs/migrations/0.7.0-use-cases.md) explains the breaking API changes.

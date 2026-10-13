@@ -8,7 +8,7 @@ This document covers the public API. Start with the [README](../Readme.md) if yo
 | --- | --- |
 | `UseCase<I, E, O>` | Public callable application use case. Accepts input `I`, returns `Either<E, O>`. |
 | `Pipeline<I, E, S>` | Immutable, typed chain of steps built inside `useCase { }`. `S` is the current state type. |
-| `Workflow<I, O>` | A focused workflow step from input state `I` to output state `O`. |
+| `Workflow<I, O>` | A named step from input state `I` to output state `O`, built with `workflow(id) { }` or inline with `.then(id) { }`. |
 | `WorkflowStepScope` | Receiver of a step: raise errors, read `context`, `emit` events, `put` context data. |
 | `WorkflowResult<S>` | State, events, and context: the outcome of a step run on its own, and the receiver of `thenIf` predicates. |
 | `ResultScope<S>` | Receiver of `result { }`: final events and context, plus `requireEvent<T>()`. |
@@ -69,13 +69,13 @@ val registerUser: UseCase<RegisterUserCommand, RegisterUserError, UserDto> =
       ensure(command.email.isNotBlank()) { WorkflowError.ValidationError("Email is required") }
       RegistrationDraft(command.email, command.password)
     }
-      .then(ValidateRegistration())                       // RegistrationDraft -> ValidRegistration
-      .thenIf(ApplyInviteCode()) { context[INVITE_CODE] != null } // ValidRegistration -> ValidRegistration
-      .parallel(RecordSignupAttempt(), PublishRegistrationStarted())
-      .parallelJoin(CreateUser(users), CreateUserProfile(profiles), policy = ParallelErrorPolicy.FailFast) { user, profile ->
+      .then(validateRegistration)                       // RegistrationDraft -> ValidRegistration
+      .thenIf(applyInviteCode) { context[INVITE_CODE] != null } // ValidRegistration -> ValidRegistration
+      .parallel(recordSignupAttempt, publishRegistrationStarted)
+      .parallelJoin(createUser(users), createUserProfile(profiles), policy = ParallelErrorPolicy.FailFast) { user, profile ->
         RegisteredUser(id = user.id, email = email, profileId = profile.id) // `this` is the ValidRegistration
       }
-      .thenLaunch(SendWelcomeEmail(), timeout = 2.seconds)
+      .thenLaunch(sendWelcomeEmail, timeout = 2.seconds)
       .awaitLaunched()
       .result { user -> UserDto(id = user.id, email = user.email) }
       .logging {
@@ -121,21 +121,30 @@ If the block produces an `Either`, call `.bind()` on it. Returning the `Either` 
 
 ### `then`
 
-Runs a workflow on the current state. Its output becomes the new state:
+Runs a step on the current state. Its output becomes the new state. Write the step inline, or pass a reusable one:
 
 ```kotlin
-.then(ValidateRegistration())
-.then(CreateUser(users))
+.then("hash-password") { draft -> draft.copy(password = hasher.hash(draft.password)) }
+.then(validateRegistration)
+.then(createUser(users))
 ```
 
-The workflow must be a `Workflow<S, O>` where `S` is the current state type. A mismatch is a compile error.
+A reusable step must be a `Workflow<S, O>` where `S` is the current state type. A mismatch is a compile error.
+
+### `guard`
+
+Checks the current state and passes it on unchanged:
+
+```kotlin
+.guard("authorize") { order -> ensure(order.customer.canOrder) { OrderError.NotAllowed } }
+```
 
 ### `thenIf`
 
 Runs a workflow only when a predicate matches:
 
 ```kotlin
-.thenIf(SendWelcomeEmail()) { user -> user.marketingOptIn && context[FeatureFlags.WELCOME_EMAIL] == true }
+.thenIf(sendWelcomeEmail) { user -> user.marketingOptIn && context[FeatureFlags.WELCOME_EMAIL] == true }
 ```
 
 The predicate receives the current state as its parameter and a `WorkflowResult<S>` as its receiver, so `state`, `events`, and `context` are available. Because the step may be skipped, it must be a `Workflow<S, S>`. Keep predicates small and side-effect free. Exceptions thrown by the predicate become `WorkflowError.ExceptionError`.
@@ -145,8 +154,8 @@ The predicate receives the current state as its parameter and a `WorkflowResult<
 Runs side-effect workflows concurrently on the current state and keeps that state:
 
 ```kotlin
-.parallel(SendReceiptEmail(), PublishPaymentEvent())
-.parallel(SendReceiptEmail(), PublishPaymentEvent(), policy = ParallelErrorPolicy.FailFast)
+.parallel(sendReceiptEmail, publishPaymentEvent)
+.parallel(sendReceiptEmail, publishPaymentEvent, policy = ParallelErrorPolicy.FailFast)
 ```
 
 Each workflow must accept `S`; its output is ignored. Events are merged in parameter order, and context from every branch is merged. A failing branch fails the use case.
@@ -156,7 +165,7 @@ Each workflow must accept `S`; its output is ignored. Events are merged in param
 Runs state-producing workflows concurrently on the current state and merges their outputs into a new state:
 
 ```kotlin
-.parallelJoin(CalculateSubtotal(), CalculateTax()) { subtotal, tax ->
+.parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
   PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the current state
 }
 ```
@@ -171,7 +180,7 @@ Branches run with the same starting context. Each branch only merges the context
 
 ```kotlin
 val priceOrder: Workflow<ValidatedOrder, PricedOrder> =
-  parallelJoin(CalculateSubtotal(), CalculateTax()) { subtotal, tax ->
+  parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
     PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the input
   }
 
@@ -184,9 +193,9 @@ startWith { command -> command.toValidatedOrder() }
 `thenLaunch` starts a side-effect workflow without waiting for it. The main chain continues with the same state:
 
 ```kotlin
-.thenLaunch(SendAuditEvent())
-.thenLaunch(SendWelcomeEmail(), timeout = 2.seconds)
-.then(ContinueMainFlow())
+.thenLaunch(sendAuditEvent)
+.thenLaunch(sendWelcomeEmail, timeout = 2.seconds)
+.then(continueMainFlow)
 .awaitLaunched()
 ```
 
@@ -229,21 +238,14 @@ Exceptions thrown by the block become `WorkflowError.ExceptionError`.
 
 ## Writing Workflows
 
-Implement `Workflow<I, O>` for a step with dependencies:
+Steps are functions; you never implement `Workflow` yourself. Write steps inline on the pipeline:
 
 ```kotlin
-class ReserveInventory(private val inventory: Inventory) : Workflow<ValidatedOrder, ReservedOrder> {
-  override val id = "reserve-inventory"
-
-  override suspend fun WorkflowStepScope.execute(input: ValidatedOrder): ReservedOrder {
-    val reservation = ensureNotNull(inventory.reserve(input.items)) { OrderError.OutOfStock }
-    emit(InventoryReserved(input.orderId, reservation.id))
-    return ReservedOrder(input, reservation)
-  }
-}
+.then("reserve-inventory") { order -> inventory.reserve(order) }
+.guard("authorize") { order -> ensure(order.customer.canOrder) { OrderError.NotAllowed } }
 ```
 
-Use the `workflow` function for a step that needs no class of its own:
+Or define a reusable step with the `workflow` function:
 
 ```kotlin
 val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
@@ -253,9 +255,23 @@ val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { dra
 }
 ```
 
-`id` is a stable identifier used in execution history, logs, and summaries.
+`id` is a stable identifier used in execution history, logs, and summaries. `parallel`, `parallelJoin`, `thenIf` and `thenLaunch` take reusable steps.
 
-Use `guard` for a step that only checks its input, such as authorization, and passes it on unchanged:
+Business logic belongs in ordinary functions that don't depend on this library. A function that can fail declares an Arrow `Raise` context parameter, and any step block can call it, because the block is a `Raise<WorkflowError>`:
+
+```kotlin
+class Inventory(private val stock: StockClient) {
+  context(_: Raise<OrderError>)
+  suspend fun reserve(order: ValidatedOrder): ReservedOrder {
+    val reservation = stock.reserve(order.items) ?: raise(OrderError.OutOfStock)
+    return ReservedOrder(order, reservation)
+  }
+}
+```
+
+Inside `context(_: Raise<...>)` functions, import `ensure` and `ensureNotNull` from `arrow.core.raise.context`. Kotlin doesn't allow method references to functions with context parameters, so call them from a lambda: `{ inventory.reserve(it) }`, not `inventory::reserve`.
+
+Use `guard` for a reusable step that only checks its input and passes it on unchanged:
 
 ```kotlin
 val authorize = guard<PlaceOrder>("authorize") { command ->

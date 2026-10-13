@@ -242,15 +242,16 @@ class UseCaseTest {
   }
 
   @Test
-  fun `guard passes its input on unchanged or fails the use case`() = runTest {
+  fun `inline guard and then steps run in the pipeline`() = runTest {
     val checkOrder = useCase(name = "CheckOrder") {
       startWith { command: PlaceOrder -> OrderDraft(command.orderId, command.quantity, command.priority) }
-        .then(guard("authorize") { draft -> ensure(draft.quantity < 5) { OrderError.PriceTooHigh(draft.quantity) } })
+        .guard("authorize") { draft -> ensure(draft.quantity < 5) { OrderError.PriceTooHigh(draft.quantity) } }
         .then(validateOrder)
-        .result { it.orderId }
+        .then("label") { order -> "${order.orderId}:${order.quantity}" }
+        .result { it }
     }
 
-    assertEquals(Either.Right("o-1"), checkOrder(PlaceOrder("o-1", 2)))
+    assertEquals(Either.Right("o-1:2"), checkOrder(PlaceOrder("o-1", 2)))
     assertEquals(Either.Left(OrderError.PriceTooHigh(7)), checkOrder(PlaceOrder("o-2", 7)))
   }
 
