@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 - 2026-10-13
 
 - Arrow (`arrow-core` and the `arrow-stack` platform) is now an `api` dependency. `Either` and `Raise` are part of the public API, but 0.9.0 published Arrow with `runtime` scope, so a consumer that did not declare Arrow itself could not compile against the library.
 - A `startWith` block that returns an `Either` now fails the use case with `WorkflowError.CompositionError` telling you to call `.bind()`. Before, the `Either` itself became the first state, which only the next step's types could catch.
