@@ -7,6 +7,7 @@ Breaking. See [Migrating to v0.10.0](docs/migrations/0.10.0.md).
 - Steps are functions. `Workflow` is now a class the library builds, so users no longer implement it or override `WorkflowStepScope.execute`. Write business logic as ordinary functions (with `context(_: Raise<E>)` when they can fail) and wire them in with `workflow(id) { }` or the new inline `Pipeline.then(id) { }`.
 - Added `Pipeline.guard(id) { }`, an inline pass-through check.
 - `WorkflowExecution.workflowName` is always the step `id`. It used to be the class name for class-based steps.
+- `Event` is a marker interface with no members, so events no longer have to carry an `id` and `timestamp`. `BaseEvent` still provides both, and its constructor accepts your own values for an injected clock or ID generator. `LaunchedFailureEvent` drops its `id` and `timestamp`.
 
 ## 0.9.1 - 2026-10-13
 

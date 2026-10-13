@@ -11,7 +11,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
-import java.util.UUID
 import kotlin.time.Duration
 import kotlin.time.TimeSource
 
@@ -286,8 +285,6 @@ public class UseCaseDefinition<I, E, S, O> internal constructor(
  * Emitted when a launched side effect fails or times out.
  */
 public data class LaunchedFailureEvent(
-  override val id: UUID,
-  override val timestamp: Instant,
   val workflowId: String,
   val message: String,
 ) : Event
@@ -426,7 +423,7 @@ private suspend fun drainLaunched(run: PipelineRun) {
       is Either.Right -> run.absorb(outcome.value.changesSince(job.context))
       is Either.Left -> {
         val message = outcome.value.message
-        run.events += LaunchedFailureEvent(UUID.randomUUID(), Instant.now(), job.workflowId, message)
+        run.events += LaunchedFailureEvent(job.workflowId, message)
         failures += "thenLaunch failure ${job.workflowId} ($message)"
       }
     }

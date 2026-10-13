@@ -5,19 +5,18 @@ import java.util.UUID
 import kotlin.time.Duration
 
 /**
- * A domain fact emitted while a use case runs.
+ * Marks a domain fact emitted while a use case runs. It requires no members, so events carry only
+ * the fields your domain needs.
  */
-public interface Event {
-  public val id: UUID
-  public val timestamp: Instant
-}
+public interface Event
 
 /**
- * Convenience base type for events with a generated [id] and [timestamp].
+ * Optional base type for events that want a generated [id] and [timestamp]. Pass your own values
+ * to use an injected clock or ID generator.
  */
 public abstract class BaseEvent(
-  final override val id: UUID = UUID.randomUUID(),
-  final override val timestamp: Instant = Instant.now(),
+  public val id: UUID = UUID.randomUUID(),
+  public val timestamp: Instant = Instant.now(),
 ) : Event
 
 /**

@@ -12,7 +12,7 @@ This document covers the public API. Start with the [README](../Readme.md) if yo
 | `WorkflowStepScope` | Receiver of a step: raise errors, read `context`, `emit` events, `put` context data. |
 | `WorkflowResult<S>` | State, events, and context: the outcome of a step run on its own, and the receiver of `thenIf` predicates. |
 | `ResultScope<S>` | Receiver of `result { }`: final events and context, plus `requireEvent<T>()`. |
-| `Event` | Domain event emitted during execution. `BaseEvent` fills in `id` and `timestamp`. |
+| `Event` | Marker for a domain event emitted during execution. It requires no members; extend `BaseEvent` to get a generated `id` and `timestamp`. |
 | `WorkflowContext` | Immutable, typed metadata that flows through the use case. |
 | `Key<T>` | Typed key for a `WorkflowContext` value. |
 | `WorkflowError` | Error interface. The library's errors are nested in it; applications can implement it. |
