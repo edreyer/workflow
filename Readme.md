@@ -154,6 +154,31 @@ Kotlin needs to know the input type to type `startWith`. Give the use case an ex
 
 For deeper API notes, see the [Workflow Reference](docs/reference.md).
 
+### Supplying Dependencies
+
+A use case is a value, so give it dependencies the way you would any other object. The library has no dependency injection of its own and works with Spring, Koin or plain constructors.
+
+The lightest option is a function that takes the services and returns the use case:
+
+```kotlin
+fun placeOrder(payments: Payments): UseCase<PlaceOrder, ApiError, OrderDto> =
+  useCase(name = "PlaceOrder", errors = ::toApiError) {
+    startWith { command -> OrderDraft(command.id, command.items) }
+      .then(validateOrder)
+      .then(capturePayment(payments))
+      .result { order -> order.toDto() }
+  }
+```
+
+When a dependency injection framework needs one type per use case, delegate to the built use case:
+
+```kotlin
+class PlaceOrderUseCase(payments: Payments) :
+  UseCase<PlaceOrder, ApiError, OrderDto> by placeOrder(payments)
+```
+
+Callers depend on `PlaceOrderUseCase` or `UseCase<PlaceOrder, ApiError, OrderDto>`. `UseCase` is a `fun interface`, so a test can stand in a lambda: `UseCase { _, _ -> Either.Right(dto) }`. A class that groups several use cases is fine when they share dependencies, but it is never required.
+
 ## Errors
 
 Every failure is a `WorkflowError`. The library provides `ValidationError`, `ExecutionError`, `DomainError`, `ExceptionError` (for anything thrown), and `CompositionError` (for a missing required event). Applications can implement `WorkflowError` with their own sealed types and raise them from any step:
