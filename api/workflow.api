@@ -342,6 +342,7 @@ public final class io/liquidsoftware/workflow/WorkflowExecution {
 }
 
 public final class io/liquidsoftware/workflow/WorkflowKt {
+	public static final fun guard (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lio/liquidsoftware/workflow/Workflow;
 	public static final fun invoke (Lio/liquidsoftware/workflow/Workflow;Ljava/lang/Object;Lio/liquidsoftware/workflow/WorkflowContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun invoke$default (Lio/liquidsoftware/workflow/Workflow;Ljava/lang/Object;Lio/liquidsoftware/workflow/WorkflowContext;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static final fun workflow (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lio/liquidsoftware/workflow/Workflow;

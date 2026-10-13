@@ -240,4 +240,29 @@ class UseCaseTest {
     val direct = UseCase<String, Nothing, Int> { input, _ -> Either.Right(input.length) }
     assertEquals(Either.Right(3), direct("abc"))
   }
+
+  @Test
+  fun `guard passes its input on unchanged or fails the use case`() = runTest {
+    val checkOrder = useCase(name = "CheckOrder") {
+      startWith { command: PlaceOrder -> OrderDraft(command.orderId, command.quantity, command.priority) }
+        .then(guard("authorize") { draft -> ensure(draft.quantity < 5) { OrderError.PriceTooHigh(draft.quantity) } })
+        .then(validateOrder)
+        .result { it.orderId }
+    }
+
+    assertEquals(Either.Right("o-1"), checkOrder(PlaceOrder("o-1", 2)))
+    assertEquals(Either.Left(OrderError.PriceTooHigh(7)), checkOrder(PlaceOrder("o-2", 7)))
+  }
+
+  @Test
+  fun `startWith returning an Either fails instead of becoming the state`() = runTest {
+    val draftOf = { command: PlaceOrder -> Either.Right(OrderDraft(command.orderId, command.quantity, command.priority)) }
+    val forgotBind = useCase(name = "ForgotBind") {
+      startWith { command: PlaceOrder -> draftOf(command) }
+        .result { it.toString() }
+    }
+
+    val error = assertIs<Either.Left<WorkflowError>>(forgotBind(PlaceOrder("o-1", 1))).value
+    assertIs<WorkflowError.CompositionError>(error)
+  }
 }
