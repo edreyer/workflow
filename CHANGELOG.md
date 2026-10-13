@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-10-13
 
 Breaking. See [Migrating to v0.10.0](docs/migrations/0.10.0.md).
 
