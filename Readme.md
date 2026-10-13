@@ -4,7 +4,7 @@
 
 In most applications, use cases are implicit. "Place an order" is a controller calling an `OrderService`, which calls `PaymentService` and `InventoryService`, each adding its own conditionals and side effects. To learn what the operation does, you trace call chains across the codebase, and services grow coupled to each other because each one orchestrates a piece of the flow.
 
-`workflow` makes each use case a value of its own: one place that lists its steps in order, with typed state between them. Services go back to being capabilities (store data, charge a card, send an email) that steps call, and they stop calling each other.
+`workflow` formalizes the use case as a concept in your code. A `UseCase<Input, Error, Output>` is a type of its own, and each one lists its steps in order, with typed state between them. Services go back to being capabilities (store data, charge a card, send an email) that steps call, and they stop calling each other. Your application's use cases become a set of named values you can find, read, and test.
 
 Use it when a business operation has multiple steps, conditional branches, parallel work, domain events, or boundary-specific input/output needs. Define the use case as one typed pipeline:
 
@@ -21,7 +21,7 @@ public input -> startWith -> state -> step -> state -> step -> ... -> result -> 
 - Fail with your own sealed error types, using Arrow's `Raise` (`ensure`, `raise`, `bind()`), and map them with an exhaustive `when`.
 - Get debug invocation logs and summaries that never include command, state, event, output, or error payloads unless you ask for them.
 
-A single use case can also be written as a plain function with Arrow's `either { }`, and for one or two use cases that is often enough. The library pays off across many: every use case has the same visible shape, and every step is named, timed, and attributed when it fails, without wiring that by hand each time.
+A single use case can also be written as a plain function with Arrow's `either { }`. What that lacks is the concept: nothing marks the function as a use case, and nothing gives every use case the same shape. The library stays lightweight and adds exactly that, plus named, timed steps that are attributed when they fail.
 
 For the architectural motivation, see [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md).
 
