@@ -303,7 +303,7 @@ Requires Java 17 or later. Depends on Arrow `arrow-core`, `kotlinx-coroutines-co
 - [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md) explains the design problem this library addresses.
 - [Design Guidance](docs/design-guidance.md) covers when to use this library and how to structure workflows.
 - [Workflow Reference](docs/reference.md) covers every DSL method, errors, context, and logging.
-- [Migrating to v0.10.0](docs/migrations/0.10.0.md) (unreleased) covers the breaking changes on `main` so far.
+- [Migrating to v0.10.0](docs/migrations/0.10.0.md) shows every breaking change with before and after examples.
 - [Migrating to v0.9.0 Typed Pipelines](docs/migrations/0.9.0-typed-pipelines.md) shows every breaking change with before and after examples.
 - [Migrating to v0.8.0 Use Case Logging](docs/migrations/0.8.0-use-case-logging.md) explains how to adopt the logging DSL.
 - [Migrating from v0.6.0 to v0.7.0](docs/migrations/0.7.0-use-cases.md) explains the breaking API changes.
