@@ -404,15 +404,20 @@ The library does not log input, state, event payloads, output, or error messages
 
 ## Use Case Logging DSL
 
-Global configuration should be set once at application startup before invoking use cases:
+Build one `UseCaseConfig` at application startup and pass it to each use case, the same way you pass other dependencies. Use cases built without one use `UseCaseConfig.Default`:
 
 ```kotlin
-useCaseLoggingGlobalConfig {
+val appConfig = useCaseConfig {
   outcomeStyle(OutcomeStyle.Plain)
   defaultSummaryFields(DefaultSummaryFields.Enabled)
   onSummary { summary -> metrics.record(summary) }
 }
+
+fun placeOrder(payments: Payments, config: UseCaseConfig) =
+  useCase("PlaceOrder", errors = ::toApiError, config = config) { ... }
 ```
+
+To adjust the application config for one use case, pass it as the base: `useCaseConfig(appConfig) { outcomeStyle(OutcomeStyle.AnsiColor) }`. There is no global state, so tests can give each use case its own listener.
 
 Options:
 
@@ -422,7 +427,7 @@ Options:
 | `defaultSummaryFields` | `DefaultSummaryFields.Enabled`, `DefaultSummaryFields.Disabled` | `DefaultSummaryFields.Enabled` |
 | `onSummary` | `(UseCaseSummary) -> Unit` | none |
 
-`onSummary` adds a listener that is called with a `UseCaseSummary` after every use case invocation, whatever the log level. Each call adds another listener; `clearSummaryListeners()` removes them all. Listeners run on the caller's coroutine; exceptions they throw are logged and ignored.
+`onSummary` adds a listener that is called with a `UseCaseSummary` after every use case invocation, whatever the log level. Each call adds another listener. Listeners run on the caller's coroutine; exceptions they throw are logged and ignored.
 
 Log fields render as stable `key=value` pairs.
 
@@ -463,7 +468,7 @@ Explicit fields cannot be blank or use the reserved built-in names `name`, `outc
 Error messages are redacted by default because they may contain user data, so `rootError.message` is `null`. Use `withErrorMessages()` to get a copy that includes it:
 
 ```kotlin
-useCaseLoggingGlobalConfig {
+useCaseConfig {
   onSummary { summary -> log.info(summary.withErrorMessages().toString()) }
 }
 ```

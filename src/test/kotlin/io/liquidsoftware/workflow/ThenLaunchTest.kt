@@ -114,20 +114,15 @@ class ThenLaunchTest {
   @Test
   fun `a thenLaunch timeout is recorded as a failed execution`() = runTest {
     val summaries = mutableListOf<UseCaseSummary>()
-    resetUseCaseLoggingGlobalConfigForTest()
-    useCaseLoggingGlobalConfig { onSummary { summaries += it } }
-    try {
-      val useCase: UseCase<Seed, WorkflowError, String> = useCase("Test") {
-        startWith { it }.thenLaunch(sideEffect("slow", delayMs = 200), timeout = 50.milliseconds).result { it.value }
-      }
-
-      useCase(Seed("x"))
-
-      val execution = summaries.single().executions.single { it.workflowId == "slow" }
-      assertEquals(false, execution.succeeded)
-    } finally {
-      resetUseCaseLoggingGlobalConfigForTest()
+    val config = useCaseConfig { onSummary { summaries += it } }
+    val useCase: UseCase<Seed, WorkflowError, String> = useCase("Test", config = config) {
+      startWith { it }.thenLaunch(sideEffect("slow", delayMs = 200), timeout = 50.milliseconds).result { it.value }
     }
+
+    useCase(Seed("x"))
+
+    val execution = summaries.single().executions.single { it.workflowId == "slow" }
+    assertEquals(false, execution.succeeded)
   }
 
   @Test

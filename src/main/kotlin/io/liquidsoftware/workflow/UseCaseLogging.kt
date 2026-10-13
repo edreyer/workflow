@@ -15,17 +15,46 @@ public enum class DefaultSummaryFields {
   Enabled,
 }
 
-internal data class UseCaseGlobalConfig(
-  val outcomeStyle: OutcomeStyle = OutcomeStyle.Plain,
-  val defaultSummaryFields: DefaultSummaryFields = DefaultSummaryFields.Enabled,
-  val summaryListeners: List<(UseCaseSummary) -> Unit> = emptyList(),
-)
+/**
+ * Logging and summary settings for use cases. Build one with [useCaseConfig] at application
+ * startup and pass it to each `useCase`; use cases built without one use [Default].
+ */
+public class UseCaseConfig private constructor(
+  internal val outcomeStyle: OutcomeStyle,
+  internal val defaultSummaryFields: DefaultSummaryFields,
+  internal val summaryListeners: List<(UseCaseSummary) -> Unit>,
+) {
+  internal fun copy(
+    outcomeStyle: OutcomeStyle = this.outcomeStyle,
+    defaultSummaryFields: DefaultSummaryFields = this.defaultSummaryFields,
+    summaryListeners: List<(UseCaseSummary) -> Unit> = this.summaryListeners,
+  ): UseCaseConfig = UseCaseConfig(outcomeStyle, defaultSummaryFields, summaryListeners)
+
+  public companion object {
+    /** Plain outcomes, default summary fields enabled, and no summary listeners. */
+    public val Default: UseCaseConfig = UseCaseConfig(OutcomeStyle.Plain, DefaultSummaryFields.Enabled, emptyList())
+  }
+}
 
 /**
- * Receiver of [useCaseLoggingGlobalConfig].
+ * Builds a [UseCaseConfig], starting from [base]. Pass an application-wide config as [base] to
+ * adjust it for one use case.
+ *
+ * ```kotlin
+ * val appConfig = useCaseConfig { onSummary { summary -> metrics.record(summary) } }
+ * val placeOrder = useCase("PlaceOrder", config = appConfig) { ... }
+ * ```
+ */
+public fun useCaseConfig(
+  base: UseCaseConfig = UseCaseConfig.Default,
+  configure: UseCaseConfigBuilder.() -> Unit,
+): UseCaseConfig = UseCaseConfigBuilder(base).apply(configure).build()
+
+/**
+ * Receiver of [useCaseConfig].
  */
 @WorkflowDsl
-public class UseCaseLoggingGlobalConfigBuilder internal constructor(private var config: UseCaseGlobalConfig) {
+public class UseCaseConfigBuilder internal constructor(private var config: UseCaseConfig) {
   /** Plain `outcome=success`, or ANSI-colored outcomes for local console logs. */
   public fun outcomeStyle(value: OutcomeStyle) {
     config = config.copy(outcomeStyle = value)
@@ -37,33 +66,14 @@ public class UseCaseLoggingGlobalConfigBuilder internal constructor(private var 
   }
 
   /**
-   * Calls [listener] with a [UseCaseSummary] after every use case invocation, for metrics or custom
+   * Calls [listener] with a [UseCaseSummary] after every invocation, for metrics or custom
    * logging. Listeners run on the caller's coroutine; exceptions they throw are logged and ignored.
    */
   public fun onSummary(listener: (UseCaseSummary) -> Unit) {
     config = config.copy(summaryListeners = config.summaryListeners + listener)
   }
 
-  /** Removes every summary listener registered so far. */
-  public fun clearSummaryListeners() {
-    config = config.copy(summaryListeners = emptyList())
-  }
-
-  internal fun build(): UseCaseGlobalConfig = config
-}
-
-@Volatile
-private var currentConfig = UseCaseGlobalConfig()
-
-/**
- * Configures use case logging and summary listeners once at application startup.
- */
-public fun useCaseLoggingGlobalConfig(configure: UseCaseLoggingGlobalConfigBuilder.() -> Unit) {
-  currentConfig = UseCaseLoggingGlobalConfigBuilder(currentConfig).apply(configure).build()
-}
-
-internal fun resetUseCaseLoggingGlobalConfigForTest() {
-  currentConfig = UseCaseGlobalConfig()
+  internal fun build(): UseCaseConfig = config
 }
 
 internal data class UseCaseLogMetadata(
@@ -148,6 +158,7 @@ internal fun logUseCaseStarted(useCaseName: String) {
 }
 
 internal fun logUseCaseFinished(
+  config: UseCaseConfig,
   useCaseName: String,
   succeeded: Boolean,
   duration: Duration,
@@ -156,7 +167,6 @@ internal fun logUseCaseFinished(
 ) {
   if (!useCaseLogger.isDebugEnabled) return
 
-  val config = currentConfig
   val fields = buildList {
     add(UseCaseLogField("name", useCaseName))
     add(UseCaseLogField("outcome", config.renderOutcome(succeeded)))
@@ -172,7 +182,7 @@ internal fun logUseCaseFinished(
   useCaseLogger.debug(message, *fields.map { it.value }.toTypedArray())
 }
 
-private fun UseCaseGlobalConfig.renderOutcome(succeeded: Boolean): String {
+private fun UseCaseConfig.renderOutcome(succeeded: Boolean): String {
   val outcome = if (succeeded) "success" else "failure"
   return when (outcomeStyle) {
     OutcomeStyle.Plain -> outcome
@@ -190,8 +200,8 @@ internal fun logUseCaseProjectionFailure(useCaseName: String, error: Throwable) 
   }
 }
 
-internal fun notifySummaryListeners(summary: UseCaseSummary) {
-  currentConfig.summaryListeners.forEach { listener ->
+internal fun notifySummaryListeners(config: UseCaseConfig, summary: UseCaseSummary) {
+  config.summaryListeners.forEach { listener ->
     try {
       listener(summary)
     } catch (ex: Exception) {

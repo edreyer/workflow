@@ -30,11 +30,13 @@ class UseCaseLoggingTest {
 
   private fun registerPatient(
     vararg steps: Workflow<Patient, Patient>,
+    config: UseCaseConfig = UseCaseConfig.Default,
     logging: UseCaseLoggingBuilder<PatientError, Patient>.() -> Unit = {},
   ): UseCase<RegisterPatient, PatientError, Int> =
     useCase(
       name = "RegisterPatient",
       errors = { PatientError(it.code, retryable = false) },
+      config = config,
     ) {
       steps.fold(startWith { command -> Patient(command.patientName) }) { pipeline, step -> pipeline.then(step) }
         .result { it.patientName.length }
@@ -71,14 +73,14 @@ class UseCaseLoggingTest {
   }
 
   @Test
-  fun `global config can disable default summary fields and color the outcome`() = runTest {
+  fun `config can disable default summary fields and color the outcome`() = runTest {
     withUseCaseLogs { events ->
-      useCaseLoggingGlobalConfig {
+      val config = useCaseConfig {
         defaultSummaryFields(DefaultSummaryFields.Disabled)
         outcomeStyle(OutcomeStyle.AnsiColor)
       }
 
-      registerPatient(register)(RegisterPatient("Alice"))
+      registerPatient(register, config = config)(RegisterPatient("Alice"))
 
       val message = events.last().formattedMessage
       assertTrue(message.contains("outcome=\u001B[32msuccess\u001B[0m"))
@@ -176,14 +178,12 @@ class UseCaseLoggingTest {
     val previousAdditive = logger.isAdditive
     val appender = ListAppender<ILoggingEvent>().apply { start() }
 
-    resetUseCaseLoggingGlobalConfigForTest()
     logger.level = Level.DEBUG
     logger.isAdditive = false
     logger.addAppender(appender)
     try {
       assertions(appender.list)
     } finally {
-      resetUseCaseLoggingGlobalConfigForTest()
       logger.detachAppender(appender)
       logger.level = previousLevel
       logger.isAdditive = previousAdditive

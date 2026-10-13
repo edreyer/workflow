@@ -2,8 +2,6 @@ package io.liquidsoftware.workflow
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -16,14 +14,7 @@ class UseCaseSummaryTest {
 
   private val summaries = mutableListOf<UseCaseSummary>()
 
-  @BeforeTest
-  fun registerListener() {
-    resetUseCaseLoggingGlobalConfigForTest()
-    useCaseLoggingGlobalConfig { onSummary { summaries += it } }
-  }
-
-  @AfterTest
-  fun reset() = resetUseCaseLoggingGlobalConfigForTest()
+  private val config = useCaseConfig { onSummary { summaries += it } }
 
   private val step = workflow<Input, Input>("step") { emit(Done(it.value)); it }
   private val rejectNegative = workflow<Input, Input>("reject-negative") { input ->
@@ -31,7 +22,7 @@ class UseCaseSummaryTest {
     input
   }
 
-  private val useCase: UseCase<Input, WorkflowError, Int> = useCase(name = "Summarized") {
+  private val useCase: UseCase<Input, WorkflowError, Int> = useCase(name = "Summarized", config = config) {
     startWith { it }
       .then(step)
       .then(rejectNegative)
@@ -66,7 +57,7 @@ class UseCaseSummaryTest {
   @Test
   fun `failure summary keeps the run's events and launched failures and ignores launched steps when naming the failure`() = runTest {
     val failingSideEffect = workflow<Input, Unit>("audit") { raise(WorkflowError.ExecutionError("audit down")) }
-    val failing: UseCase<Input, WorkflowError, Int> = useCase(name = "Failing") {
+    val failing: UseCase<Input, WorkflowError, Int> = useCase(name = "Failing", config = config) {
       startWith { it }
         .then(step)
         .thenLaunch(failingSideEffect)
@@ -90,7 +81,7 @@ class UseCaseSummaryTest {
       raise(WorkflowError.DomainError("slow", "slow failed"))
     }
     val fastFailure = workflow<Input, Int>("fast-failure") { raise(WorkflowError.DomainError("fast", "fast failed")) }
-    val parallelFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "ParallelFailures") {
+    val parallelFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "ParallelFailures", config = config) {
       startWith { it }
         .parallelJoin(slowFailure, fastFailure) { a, b -> a + b }
         .result { it }
@@ -110,7 +101,7 @@ class UseCaseSummaryTest {
       raise(Shared)
     }
     val fast = workflow<Input, Int>("fast-shared") { raise(Shared) }
-    val sharedFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "SharedFailures") {
+    val sharedFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "SharedFailures", config = config) {
       startWith { it }
         .parallelJoin(slow, fast) { a, b -> a + b }
         .result { it }
@@ -128,7 +119,7 @@ class UseCaseSummaryTest {
       delay(10)
       raise(WorkflowError.ExecutionError("down"))
     }
-    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "Partial") {
+    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "Partial", config = config) {
       startWith { it }
         .parallel(emitting, failing)
         .result { it.value }
@@ -147,7 +138,7 @@ class UseCaseSummaryTest {
       delay(10)
       raise(WorkflowError.ExecutionError("down"))
     }
-    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "PartialJoin") {
+    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "PartialJoin", config = config) {
       startWith { it }
         .parallelJoin(emitting, failing) { a, b -> a + b }
         .result { it }
@@ -160,7 +151,7 @@ class UseCaseSummaryTest {
 
   @Test
   fun `listeners still get a summary when the error mapper throws`() = runTest {
-    val throwingMapper: UseCase<Input, String, Int> = useCase(name = "ThrowingMapper", errors = { error("bad mapper") }) {
+    val throwingMapper: UseCase<Input, String, Int> = useCase(name = "ThrowingMapper", errors = { error("bad mapper") }, config = config) {
       startWith { it }.then(step).then(rejectNegative).result { it.value }
     }
 
@@ -171,7 +162,7 @@ class UseCaseSummaryTest {
 
   @Test
   fun `failure outside any step names no step`() = runTest {
-    val rejecting: UseCase<Input, WorkflowError, Int> = useCase(name = "Rejecting") {
+    val rejecting: UseCase<Input, WorkflowError, Int> = useCase(name = "Rejecting", config = config) {
       startWith<Input> { raise(WorkflowError.ValidationError("bad")) }
         .then(step)
         .result { it.value }
@@ -183,19 +174,21 @@ class UseCaseSummaryTest {
   }
 
   @Test
-  fun `clearSummaryListeners removes registered listeners`() = runTest {
-    useCaseLoggingGlobalConfig { clearSummaryListeners() }
+  fun `use cases without a config notify no listeners`() = runTest {
+    val unconfigured: UseCase<Input, WorkflowError, Int> = useCase(name = "Unconfigured") { startWith { it }.result { it.value } }
 
-    useCase(Input(1))
+    unconfigured(Input(1))
 
     assertTrue(summaries.isEmpty())
   }
 
   @Test
   fun `a throwing listener does not affect the use case`() = runTest {
-    useCaseLoggingGlobalConfig { onSummary { error("listener down") } }
+    val withThrowingListener = useCase(name = "Summarized", config = useCaseConfig(config) { onSummary { error("listener down") } }) {
+      startWith { input: Input -> input }.result { it.value }
+    }
 
-    assertEquals(3, useCase(Input(3)).getOrNull())
+    assertEquals(3, withThrowingListener(Input(3)).getOrNull())
     assertEquals(1, summaries.size)
   }
 }

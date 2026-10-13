@@ -152,13 +152,29 @@ public final class io/liquidsoftware/workflow/UseCaseBuilder {
 public abstract interface class io/liquidsoftware/workflow/UseCaseCommand {
 }
 
+public final class io/liquidsoftware/workflow/UseCaseConfig {
+	public static final field Companion Lio/liquidsoftware/workflow/UseCaseConfig$Companion;
+}
+
+public final class io/liquidsoftware/workflow/UseCaseConfig$Companion {
+	public final fun getDefault ()Lio/liquidsoftware/workflow/UseCaseConfig;
+}
+
+public final class io/liquidsoftware/workflow/UseCaseConfigBuilder {
+	public final fun defaultSummaryFields (Lio/liquidsoftware/workflow/DefaultSummaryFields;)V
+	public final fun onSummary (Lkotlin/jvm/functions/Function1;)V
+	public final fun outcomeStyle (Lio/liquidsoftware/workflow/OutcomeStyle;)V
+}
+
 public final class io/liquidsoftware/workflow/UseCaseDefinition {
 	public final fun logging (Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCaseDefinition;
 }
 
 public final class io/liquidsoftware/workflow/UseCaseKt {
-	public static final fun useCase (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
-	public static final fun useCase (Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
+	public static final fun useCase (Ljava/lang/String;Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
+	public static final fun useCase (Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
+	public static synthetic fun useCase$default (Ljava/lang/String;Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/liquidsoftware/workflow/UseCase;
+	public static synthetic fun useCase$default (Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/liquidsoftware/workflow/UseCase;
 }
 
 public final class io/liquidsoftware/workflow/UseCaseLogFieldCollector {
@@ -170,15 +186,9 @@ public final class io/liquidsoftware/workflow/UseCaseLoggingBuilder {
 	public final fun success (Lkotlin/jvm/functions/Function2;)V
 }
 
-public final class io/liquidsoftware/workflow/UseCaseLoggingGlobalConfigBuilder {
-	public final fun clearSummaryListeners ()V
-	public final fun defaultSummaryFields (Lio/liquidsoftware/workflow/DefaultSummaryFields;)V
-	public final fun onSummary (Lkotlin/jvm/functions/Function1;)V
-	public final fun outcomeStyle (Lio/liquidsoftware/workflow/OutcomeStyle;)V
-}
-
 public final class io/liquidsoftware/workflow/UseCaseLoggingKt {
-	public static final fun useCaseLoggingGlobalConfig (Lkotlin/jvm/functions/Function1;)V
+	public static final fun useCaseConfig (Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCaseConfig;
+	public static synthetic fun useCaseConfig$default (Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/liquidsoftware/workflow/UseCaseConfig;
 }
 
 public final class io/liquidsoftware/workflow/UseCaseSummary {

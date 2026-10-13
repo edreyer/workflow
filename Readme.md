@@ -235,14 +235,16 @@ Use cases emit debug-level SLF4J logs when they start and finish. By default the
 
 They do not log command input, workflow state, event payloads, projected output, or error payloads unless you explicitly add fields. Keep `name` stable and free of user data.
 
-Configure formatting and summary listeners once at application startup:
+Configure formatting and summary listeners once at application startup, and pass the config to each use case like any other dependency:
 
 ```kotlin
-useCaseLoggingGlobalConfig {
+val appConfig = useCaseConfig {
   outcomeStyle(OutcomeStyle.Plain)
   defaultSummaryFields(DefaultSummaryFields.Enabled)
   onSummary { summary -> metrics.record(summary) }
 }
+
+val processOrder = useCase("ProcessOrder", errors = ::toApiError, config = appConfig) { ... }
 ```
 
 `onSummary` receives a `UseCaseSummary` after every invocation: name, outcome, duration, event count, executed steps, the failing step and error code, launched failures, and correlation ID. Error messages are redacted unless you call `summary.withErrorMessages()`.

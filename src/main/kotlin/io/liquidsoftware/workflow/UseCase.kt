@@ -39,11 +39,13 @@ public fun interface UseCase<in I, out E, out O> {
  * ```
  *
  * @param name Stable operational name used in logs and summaries. Do not include user or request data.
+ * @param config Logging and summary settings, usually one [UseCaseConfig] shared by the application.
  */
 public fun <I, O> useCase(
   name: String,
+  config: UseCaseConfig = UseCaseConfig.Default,
   configure: UseCaseBuilder<I, WorkflowError>.() -> UseCaseDefinition<I, WorkflowError, *, O>,
-): UseCase<I, WorkflowError, O> = useCase(name, { it }, configure)
+): UseCase<I, WorkflowError, O> = useCase(name, { it }, config, configure)
 
 /**
  * Builds a use case that maps [WorkflowError]s to the application's error type [E].
@@ -52,14 +54,16 @@ public fun <I, O> useCase(
  * raised, including application-defined [WorkflowError] types.
  *
  * @param name Stable operational name used in logs and summaries. Do not include user or request data.
+ * @param config Logging and summary settings, usually one [UseCaseConfig] shared by the application.
  */
 public fun <I, E, O> useCase(
   name: String,
   errors: (WorkflowError) -> E,
+  config: UseCaseConfig = UseCaseConfig.Default,
   configure: UseCaseBuilder<I, E>.() -> UseCaseDefinition<I, E, *, O>,
 ): UseCase<I, E, O> {
   val definition = UseCaseBuilder<I, E>().configure()
-  return UseCaseRunner(name, errors, definition)
+  return UseCaseRunner(name, errors, config, definition)
 }
 
 /**
@@ -432,6 +436,7 @@ private suspend fun drainLaunched(run: PipelineRun) {
 internal class UseCaseRunner<I, E, S, O>(
   private val name: String,
   private val errors: (WorkflowError) -> E,
+  private val config: UseCaseConfig,
   private val definition: UseCaseDefinition<I, E, S, O>,
 ) : UseCase<I, E, O> {
 
@@ -471,16 +476,16 @@ internal class UseCaseRunner<I, E, S, O>(
     val mapped: Either<E, O> = try {
       outcome.mapLeft(errors)
     } catch (ex: Throwable) {
-      logUseCaseFinished(name, succeeded = false, summary.duration, metadata)
-      notifySummaryListeners(summary)
+      logUseCaseFinished(config, name, succeeded = false, summary.duration, metadata)
+      notifySummaryListeners(config, summary)
       throw ex
     }
 
-    logUseCaseFinished(name, mapped.isRight(), summary.duration, metadata) {
+    logUseCaseFinished(config, name, mapped.isRight(), summary.duration, metadata) {
       @Suppress("UNCHECKED_CAST")
       definition.logging.fieldsFor(name, finalResult as WorkflowResult<S>?, mapped)
     }
-    notifySummaryListeners(summary)
+    notifySummaryListeners(config, summary)
     return mapped
   }
 }

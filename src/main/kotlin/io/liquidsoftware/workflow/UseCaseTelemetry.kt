@@ -5,7 +5,7 @@ import kotlin.time.Duration
 
 /**
  * Summary of one use case invocation, for metrics or custom logging. Register a listener with
- * `useCaseLoggingGlobalConfig { onSummary { summary -> ... } }`.
+ * `useCaseConfig { onSummary { summary -> ... } }`.
  *
  * Error messages are redacted unless [withErrorMessages] is used.
  */

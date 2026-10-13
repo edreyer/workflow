@@ -136,7 +136,7 @@ Tests use `kotlin("test")` on JUnit 5 with `kotlinx-coroutines-test`
   `WorkflowError` interface with the library's built-in errors.
 - `UseCaseLogging.kt` and `UseCaseTelemetry.kt`: debug start and finish logs
   that carry only safe metadata unless fields are added explicitly,
-  `useCaseLoggingGlobalConfig { }`, and `UseCaseSummary` for `onSummary`
+  `UseCaseConfig` built with `useCaseConfig { }` and passed to `useCase`, and `UseCaseSummary` for `onSummary`
   listeners. Error messages are redacted unless `withErrorMessages()` is
   called.
 
