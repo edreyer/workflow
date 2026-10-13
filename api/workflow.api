@@ -247,6 +247,10 @@ public final class io/liquidsoftware/workflow/Workflow {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class io/liquidsoftware/workflow/WorkflowCompositionException : java/lang/IllegalStateException {
+	public fun <init> (Ljava/lang/String;)V
+}
+
 public final class io/liquidsoftware/workflow/WorkflowContext {
 	public static final field Companion Lio/liquidsoftware/workflow/WorkflowContext$Companion;
 	public fun <init> ()V

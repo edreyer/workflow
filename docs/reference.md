@@ -116,7 +116,7 @@ startWith { command: RegisterUserCommand ->
 
 The block runs with an Arrow `Raise<E>` receiver, where `E` is the use case's error type. Return the state directly, and fail with `ensure`, `ensureNotNull`, `raise`, or `bind()`. Exceptions thrown by the block become `Failure.Unexpected`.
 
-If the block produces an `Either`, call `.bind()` on it. Returning the `Either` itself fails the use case with `Failure.Unexpected` instead of making the `Either` the state.
+If the block produces an `Either`, call `.bind()` on it. Returning the `Either` itself fails the use case with `Failure.Unexpected`, caused by a `WorkflowCompositionException`, instead of making the `Either` the state.
 
 ### `then`
 
@@ -221,7 +221,7 @@ The block's receiver is a `ResultScope<S, E>`, which is an Arrow `Raise<E>` and 
 | `events` | Every event emitted by the pipeline, in order. |
 | `context` | The final context. |
 | `result` | The final `WorkflowResult<S>` (state, events, context). |
-| `requireEvent<T>()` | The last event of type `T`. When none was emitted the use case was assembled wrongly, so it fails with `Failure.Unexpected`. |
+| `requireEvent<T>()` | The last event of type `T`. When none was emitted the use case was assembled wrongly, so it fails with `Failure.Unexpected` caused by a `WorkflowCompositionException`. |
 
 Combine them as needed:
 
@@ -320,7 +320,7 @@ A failed use case or step reports a `Failure<E>`:
 | Case | Meaning |
 | --- | --- |
 | `Failure.Raised(error)` | A step, `startWith`, or `result { }` raised `error`. |
-| `Failure.Unexpected(cause)` | Something threw: a step, `startWith`, a predicate, or `result { }`. This includes a step's own timeout, a missing `requireEvent`, a `startWith` that returned an `Either`, and a `thenLaunch` timeout. |
+| `Failure.Unexpected(cause)` | Something threw: a step, `startWith`, a predicate, or `result { }`. This includes a step's own timeout and a `thenLaunch` timeout. A use case assembled wrongly, such as a missing `requireEvent` or a `startWith` that returned an `Either`, fails with a `WorkflowCompositionException` as the cause, so logs and summaries name it. |
 
 The `errors` mapper receives the `Failure`, so its `when` is exhaustive with no `else`. Adding a case to `OrderError` is a compile error until the mapper handles it:
 

@@ -151,7 +151,7 @@ The `errors = ...` mapper is expected to be total and non-throwing. It receives 
 
 Use `requireEvent<EventType>()` inside `.result { }` when the public result is driven by an emitted event.
 
-It returns the last emitted event of the requested type, or fails the use case with `Failure.Unexpected` when none was emitted.
+It returns the last emitted event of the requested type, or fails the use case with `Failure.Unexpected`, caused by a `WorkflowCompositionException`, when none was emitted.
 
 ```kotlin
 val registerUserCreatedEvent: UseCase<RegisterUserCommand, ApplicationError, UserCreatedEvent> =

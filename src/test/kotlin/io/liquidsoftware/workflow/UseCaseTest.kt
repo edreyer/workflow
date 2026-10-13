@@ -138,13 +138,13 @@ class UseCaseTest {
   }
 
   @Test
-  fun `a missing requireEvent fails as Failure Unexpected`() = runTest {
+  fun `a missing requireEvent fails with a WorkflowCompositionException`() = runTest {
     val useCase: UseCase<PlaceOrder, Failure<OrderError>, Int> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .result { requireEvent<OrderPriced>().total }
     }
 
-    assertIs<Failure.Unexpected>(useCase(PlaceOrder("o-1", 3)).leftOrNull())
+    assertIs<WorkflowCompositionException>(assertIs<Failure.Unexpected>(useCase(PlaceOrder("o-1", 3)).leftOrNull()).cause)
   }
 
   @Test
@@ -249,6 +249,6 @@ class UseCaseTest {
     }
 
     val failure = assertIs<Either.Left<Failure<Nothing>>>(forgotBind(PlaceOrder("o-1", 1))).value
-    assertIs<Failure.Unexpected>(failure)
+    assertIs<WorkflowCompositionException>(assertIs<Failure.Unexpected>(failure).cause)
   }
 }

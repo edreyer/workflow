@@ -140,11 +140,18 @@ public sealed interface Failure<out E> {
   public data class Raised<out E>(val error: E) : Failure<E>
 
   /**
-   * A step, `startWith`, or `result` threw [cause], or the use case was assembled in a way that
-   * cannot run, such as a missing expected event.
+   * A step, `startWith`, or `result` threw [cause]. A use case assembled in a way that cannot run
+   * fails with a [WorkflowCompositionException] as the cause.
    */
   public data class Unexpected(val cause: Throwable) : Failure<Nothing>
 }
+
+/**
+ * The use case was assembled in a way that cannot run, such as a `requireEvent` for an event no step
+ * emits, or a `startWith` that returns an `Either`. It is a programmer error, so it reaches the
+ * `errors` mapper as the cause of a [Failure.Unexpected], and summaries report its class name.
+ */
+public class WorkflowCompositionException(message: String) : IllegalStateException(message)
 
 /**
  * Former marker for workflow state. Any type can now be workflow state.

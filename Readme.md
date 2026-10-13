@@ -200,7 +200,7 @@ Every step in a pipeline raises the pipeline's error type, a subtype of it, or `
 .then(chargeCard.mapError { e: PaymentError -> OrderError.PaymentDeclined(e.reason) })
 ```
 
-The `errors` mapper receives a `Failure<OrderError>`: either `Failure.Raised(error)`, or `Failure.Unexpected(cause)` for an exception nobody raised on purpose, which includes a missing `requireEvent`. The mapper's parameter type tells the use case its error type:
+The `errors` mapper receives a `Failure<OrderError>`: either `Failure.Raised(error)`, or `Failure.Unexpected(cause)` for an exception nobody raised on purpose. A use case wired wrongly, such as a `requireEvent` for an event no step emits, fails with a `WorkflowCompositionException` as the cause. The mapper's parameter type tells the use case its error type:
 
 ```kotlin
 fun toApiError(failure: Failure<OrderError>): ApiError = when (failure) {

@@ -83,14 +83,14 @@ public fun <I, E, R, O> useCase(
 public class UseCaseBuilder<I, E> internal constructor() {
   /**
    * Converts public input into the first workflow state. The block is an Arrow [Raise] for [E], so
-   * validate with `ensure` or `ensureNotNull`. Thrown exceptions become [Failure.Unexpected], and so
-   * does returning an `Either` instead of calling `bind()` on it.
+   * validate with `ensure` or `ensureNotNull`. Thrown exceptions become [Failure.Unexpected].
+   * Returning an `Either` instead of calling `bind()` on it fails with a [WorkflowCompositionException].
    */
   public fun <S> startWith(block: suspend Raise<E>.(input: I) -> S): Pipeline<I, E, S> {
     val start: suspend Raise<Failure<Any?>>.(Any?) -> Any? = { input ->
       @Suppress("UNCHECKED_CAST")
       val state = RaisedErrors<E>(this).block(input as I)
-      check(state !is Either<*, *>) { "startWith returned an Either. Call .bind() on it." }
+      if (state is Either<*, *>) throw WorkflowCompositionException("startWith returned an Either. Call .bind() on it.")
       state
     }
     return Pipeline(start, emptyList())
@@ -275,10 +275,10 @@ public class ResultScope<out S, in E> internal constructor(
 
   /**
    * Returns the last event of type [T]. A missing event means the use case was assembled wrongly, so
-   * it throws, and the use case fails with [Failure.Unexpected].
+   * the use case fails with [Failure.Unexpected] caused by a [WorkflowCompositionException].
    */
   public inline fun <reified T : Event> requireEvent(): T =
-    checkNotNull(events.lastEvent<T>()) { "Expected event ${T::class.simpleName} was not emitted" }
+    events.lastEvent<T>() ?: throw WorkflowCompositionException("Expected event ${T::class.simpleName} was not emitted")
 }
 
 /**
