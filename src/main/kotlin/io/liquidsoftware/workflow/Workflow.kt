@@ -65,6 +65,23 @@ public fun <I, O> workflow(
 ): Workflow<I, O> = LambdaWorkflow(id, block)
 
 /**
+ * Defines a [Workflow] that checks its input and passes it on unchanged, such as an authorization
+ * check. Fail with `ensure` or `raise`.
+ *
+ * ```kotlin
+ * val authorize = guard<PlaceOrder>("authorize") { command ->
+ *   ensure(command.customer.canOrder) { OrderError.NotAllowed }
+ * }
+ * ```
+ *
+ * @param id Stable identifier used in execution history, logs, and summaries.
+ */
+public fun <I> guard(
+  id: String,
+  block: suspend WorkflowStepScope.(input: I) -> Unit,
+): Workflow<I, I> = LambdaWorkflow(id) { input -> block(input); input }
+
+/**
  * Runs this workflow on its own and returns its new state, emitted events, and context.
  *
  * Use cases run their steps for you; call this directly to unit-test a step.

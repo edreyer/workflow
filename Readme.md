@@ -96,6 +96,14 @@ val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { dra
 }
 ```
 
+Use `guard` for a step that only checks its input, such as authorization, and passes it on unchanged:
+
+```kotlin
+val authorize = guard<PlaceOrder>("authorize") { command ->
+  ensure(command.customer.canOrder) { OrderError.NotAllowed }
+}
+```
+
 Implement `Workflow<I, O>` when a step needs its own class, for example to inject dependencies:
 
 ```kotlin

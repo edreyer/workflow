@@ -21,8 +21,9 @@ dependencies {
     // Kotlin Coroutines
     implementation(libs.kotlinx.coroutines.core)
 
-    implementation(platform(libs.arrow.stack))
-    implementation(libs.arrow.core)
+    // Either and Raise are part of the public API, so consumers need Arrow on their compile classpath.
+    api(platform(libs.arrow.stack))
+    api(libs.arrow.core)
     implementation(libs.slf4j.api)
 
     // Testing

@@ -117,6 +117,8 @@ startWith { command: RegisterUserCommand ->
 
 The block runs with an Arrow `Raise<WorkflowError>` receiver. Return the state directly, and fail with `ensure`, `ensureNotNull`, `raise`, or `bind()`. Exceptions thrown by the block become `WorkflowError.ExceptionError`.
 
+If the block produces an `Either`, call `.bind()` on it. Returning the `Either` itself fails the use case with `WorkflowError.CompositionError` instead of making the `Either` the state.
+
 ### `then`
 
 Runs a workflow on the current state. Its output becomes the new state:
@@ -252,6 +254,14 @@ val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { dra
 ```
 
 `id` is a stable identifier used in execution history, logs, and summaries.
+
+Use `guard` for a step that only checks its input, such as authorization, and passes it on unchanged:
+
+```kotlin
+val authorize = guard<PlaceOrder>("authorize") { command ->
+  ensure(command.customer.canOrder) { OrderError.NotAllowed }
+}
+```
 
 `WorkflowStepScope` is an Arrow `Raise<WorkflowError>`. It also provides:
 

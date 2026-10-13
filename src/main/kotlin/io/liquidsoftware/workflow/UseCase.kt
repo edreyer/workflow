@@ -3,6 +3,7 @@ package io.liquidsoftware.workflow
 import arrow.core.Either
 import arrow.core.raise.Raise
 import arrow.core.raise.either
+import arrow.core.raise.ensure
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
@@ -70,10 +71,15 @@ public class UseCaseBuilder<I, E> internal constructor() {
   /**
    * Converts public input into the first workflow state. The block is an Arrow [Raise], so
    * validate with `ensure` or `ensureNotNull`. Thrown exceptions become [WorkflowError.ExceptionError].
+   * Returning an `Either` instead of calling `bind()` on it fails with [WorkflowError.CompositionError].
    */
   public fun <S> startWith(block: suspend Raise<WorkflowError>.(input: I) -> S): Pipeline<I, E, S> {
-    @Suppress("UNCHECKED_CAST")
-    val start = block as suspend Raise<WorkflowError>.(Any?) -> Any?
+    val start: suspend Raise<WorkflowError>.(Any?) -> Any? = { input ->
+      @Suppress("UNCHECKED_CAST")
+      val state = block(input as I)
+      ensure(state !is Either<*, *>) { WorkflowError.CompositionError("startWith returned an Either. Call .bind() on it.") }
+      state
+    }
     return Pipeline(start, emptyList())
   }
 }
