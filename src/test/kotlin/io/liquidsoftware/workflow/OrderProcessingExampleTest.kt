@@ -1,7 +1,8 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
-import arrow.core.raise.ensure
+import arrow.core.raise.Raise
+import arrow.core.raise.context.ensure
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import java.util.UUID
@@ -25,7 +26,12 @@ class OrderProcessingExampleTest {
   data class ValidatedOrder(val orderId: UUID, val items: List<OrderItem>, val paymentToken: String)
   data class Subtotal(val amount: Double)
   data class Tax(val amount: Double)
-  data class PricedOrder(val order: ValidatedOrder, val subtotal: Double, val tax: Double) {
+  data class PricedOrder(
+    val order: ValidatedOrder,
+    val subtotal: Double,
+    val tax: Double,
+    val inventoryAvailable: Boolean = false,
+  ) {
     val total: Double get() = subtotal + tax
   }
 
@@ -36,68 +42,76 @@ class OrderProcessingExampleTest {
   data class ConfirmationSent(val orderId: UUID) : BaseEvent()
 
   // Errors
-  sealed interface OrderError : WorkflowError {
+  sealed interface OrderError {
     data object EmptyOrder : OrderError
     data class PaymentDeclined(val reason: String) : OrderError
   }
 
   data class ApiError(val status: Int, val code: String)
 
-  object Keys {
-    val INVENTORY_AVAILABLE = Key<Boolean>("inventoryAvailable")
-  }
-
   // Steps
-  private val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+  private val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-order") { draft ->
     ensure(draft.items.isNotEmpty()) { OrderError.EmptyOrder }
     emit(OrderValidated(draft.orderId))
     ValidatedOrder(draft.orderId, draft.items, draft.paymentToken)
   }
 
-  private val calculateSubtotal = workflow<ValidatedOrder, Subtotal>("calculate-subtotal") { order ->
+  private val calculateSubtotal = workflow<ValidatedOrder, Subtotal, Nothing>("calculate-subtotal") { order ->
     Subtotal(order.items.sumOf { it.quantity * it.price })
   }
 
-  private val calculateTax = workflow<ValidatedOrder, Tax>("calculate-tax") { order ->
+  private val calculateTax = workflow<ValidatedOrder, Tax, Nothing>("calculate-tax") { order ->
     Tax(order.items.sumOf { it.quantity * it.price } * 0.08)
   }
 
-  class CheckInventory : Workflow<PricedOrder, PricedOrder> {
-    override val id = "check-inventory"
-
-    override suspend fun WorkflowStepScope.execute(input: PricedOrder): PricedOrder {
+  // Domain services: plain Kotlin and Arrow, with no dependency on this library.
+  class InventoryService {
+    suspend fun isAvailable(order: PricedOrder): Boolean {
       delay(100) // inventory service call
-      put(Keys.INVENTORY_AVAILABLE, true)
-      return input
+      return order.order.items.isNotEmpty()
     }
   }
 
-  class CapturePayment : Workflow<PricedOrder, PricedOrder> {
-    override val id = "capture-payment"
-
-    override suspend fun WorkflowStepScope.execute(input: PricedOrder): PricedOrder {
+  class PaymentService {
+    context(_: Raise<OrderError>)
+    suspend fun capture(order: PricedOrder): Double {
       delay(150) // payment gateway call
-      ensure(input.order.paymentToken != "declined") { OrderError.PaymentDeclined("card declined") }
-      emit(PaymentCaptured(input.order.orderId, input.total))
-      return input
+      ensure(order.order.paymentToken != "declined") { OrderError.PaymentDeclined("card declined") }
+      return order.total
     }
   }
 
-  private val prepareShipment = workflow<PricedOrder, PricedOrder>("prepare-shipment") { order ->
+  private val inventory = InventoryService()
+  private val payments = PaymentService()
+
+  private val checkInventory = workflow<PricedOrder, PricedOrder, Nothing>("check-inventory") { order ->
+    order.copy(inventoryAvailable = inventory.isAvailable(order))
+  }
+
+  private val capturePayment = workflow<PricedOrder, Unit, OrderError>("capture-payment") { order ->
+    emit(PaymentCaptured(order.order.orderId, payments.capture(order)))
+  }
+
+  private val notifyWarehouse = workflow<PricedOrder, Unit, Nothing>("notify-warehouse") { order ->
+    delay(50) // warehouse service call
+  }
+
+  private val prepareShipment = workflow<PricedOrder, PricedOrder, Nothing>("prepare-shipment") { order ->
     emit(ShipmentPrepared(order.order.orderId, "TRACK-${order.order.orderId.toString().take(8)}"))
     order
   }
 
-  private val sendConfirmation = workflow<PricedOrder, Unit>("send-confirmation") { order ->
+  private val sendConfirmation = workflow<PricedOrder, Unit, Nothing>("send-confirmation") { order ->
     emit(ConfirmationSent(order.order.orderId))
   }
 
-  private fun toApiError(error: WorkflowError): ApiError =
-    when (error) {
-      OrderError.EmptyOrder -> ApiError(400, "empty-order")
-      is OrderError.PaymentDeclined -> ApiError(402, "payment-declined")
-      is WorkflowError.ValidationError -> ApiError(400, "invalid")
-      else -> ApiError(500, "internal")
+  private fun toApiError(failure: Failure<OrderError>): ApiError =
+    when (failure) {
+      is Failure.Raised -> when (failure.error) {
+        OrderError.EmptyOrder -> ApiError(400, "empty-order")
+        is OrderError.PaymentDeclined -> ApiError(402, "payment-declined")
+      }
+      is Failure.Unexpected -> ApiError(500, "internal")
     }
 
   // Use case
@@ -108,15 +122,16 @@ class OrderProcessingExampleTest {
         .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
           PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the ValidatedOrder
         }
-        .parallel(CheckInventory(), CapturePayment())
-        .thenIf(prepareShipment) { context[Keys.INVENTORY_AVAILABLE] == true }
+        .then(checkInventory)
+        .parallel(capturePayment, notifyWarehouse)
+        .thenIf(prepareShipment) { order -> order.inventoryAvailable }
         .thenLaunch(sendConfirmation)
         .result { order ->
           OrderReceipt(order.order.orderId, order.total, events.lastEvent<ShipmentPrepared>()?.trackingNumber)
         }
         .logging {
           success { (order) -> field("itemCount", order.order.items.size) }
-          failure { error -> field("status", error.status) }
+          failure { failure -> field("unexpected", failure is Failure.Unexpected) }
         }
     }
 

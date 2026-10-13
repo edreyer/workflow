@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Breaking. See [Migrating to v0.10.0](docs/migrations/0.10.0.md).
+
+- Steps are functions. `Workflow` is now a class the library builds, so users no longer implement it or override `WorkflowStepScope.execute`. Write business logic as ordinary functions (with `context(_: Raise<E>)` when they can fail) and wire them in with `workflow(id) { }` or the new inline `Pipeline.then(id) { }`.
+- Added `Pipeline.guard(id) { }`, an inline pass-through check.
+- `WorkflowExecution.workflowName` is always the step `id`. It used to be the class name for class-based steps.
+- `Event` is a marker interface with no members, so events no longer have to carry an `id` and `timestamp`. `BaseEvent` still provides both, and its constructor accepts your own values for an injected clock or ID generator. `LaunchedFailureEvent` drops its `id` and `timestamp`.
+- Removed `WorkflowStepScope.put`. The context is now read-only request metadata (correlation ID, tenant, flags) supplied by the caller. Data a step produces goes in its returned state. Parallel branches and launched work no longer merge context back.
+- `useCase` requires a `name`. It used to default to `"UseCase"`, which made logs and summaries from different use cases indistinguishable.
+- Replaced the global `useCaseLoggingGlobalConfig { }` with a `UseCaseConfig` value. Build it with `useCaseConfig { }` and pass it as `useCase(name, config = ...)`. `useCaseConfig(base) { }` adjusts an application-wide config for one use case. `clearSummaryListeners()` is removed.
+- Errors are your own types. `WorkflowError` and its built-in errors are removed. Steps are `Workflow<I, O, E>` and raise `E`, a pipeline accepts steps whose error type is its own, a subtype, or `Nothing`, and `mapError` adapts a step written for another error type. The `errors` mapper receives a sealed `Failure<E>` (`Raised(error)` or `Unexpected(cause)`), so it can be exhaustive. Without a mapper, a use case returns `Failure<E>`. Thrown exceptions become `Failure.Unexpected`. A use case wired wrongly (a missing `requireEvent`, or a `startWith` that returns an `Either`) fails with `Failure.Unexpected` caused by the new `WorkflowCompositionException`.
+- `.logging { failure { } }` receives the `Failure<E>` instead of the mapped error. `RootErrorInfo` replaces `code` with `unexpected`. `LaunchedFailureEvent.message` is the raised error's class name, so it carries no user data.
+
 ## 0.9.1 - 2026-10-13
 
 - Arrow (`arrow-core` and the `arrow-stack` platform) is now an `api` dependency. `Either` and `Raise` are part of the public API, but 0.9.0 published Arrow with `runtime` scope, so a consumer that did not declare Arrow itself could not compile against the library.

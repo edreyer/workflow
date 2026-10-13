@@ -87,10 +87,10 @@ Use `useCase` at application/module boundaries. It keeps boundary concerns in on
 
 ```kotlin
 val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
-  useCase(name = "RegisterUser", errors = WorkflowError::toApplicationError) {
+  useCase(name = "RegisterUser", errors = ::toApplicationError) {
     startWith { command -> command.toInitialState() }
-      .then(ValidateRegistration())
-      .then(CreateUser(users))
+      .then(validateRegistration)
+      .then(createUser(users))
       .result { user -> user.toDto() }
   }
 ```
@@ -102,7 +102,7 @@ The `result { }` block can also read the pipeline's `events` and `context` when 
 Use `parallelJoin` for independent state-producing workflows:
 
 ```kotlin
-.parallelJoin(CalculateSubtotal(), CalculateTax()) { subtotal, tax ->
+.parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
   PricedOrder(
     orderId = orderId, // `this` is the current state
     subtotal = subtotal.amount,
@@ -114,7 +114,7 @@ Use `parallelJoin` for independent state-producing workflows:
 Use `parallel(...)` when the workflows are side effects and the current state should continue unchanged:
 
 ```kotlin
-.parallel(SendReceiptEmail(), PublishPaymentEvent())
+.parallel(sendReceiptEmail, publishPaymentEvent)
 ```
 
 Use `thenLaunch` only when the side effect does not need to complete before the main chain continues. Add `awaitLaunched()` if later steps need launched events/context; anything still running when the pipeline ends is awaited before `result { }` runs.
@@ -137,27 +137,32 @@ Otherwise, prefer projecting from the final state:
 
 ## Error Boundaries
 
-Model expected business failures as your own sealed error types that implement `WorkflowError`, and raise them from steps:
+Model expected business failures as your own sealed error types, and raise them from steps. They need no library supertype:
 
 ```kotlin
-sealed interface RegistrationError : WorkflowError {
+sealed interface RegistrationError {
   data object EmailTaken : RegistrationError
   data class WeakPassword(val reason: String) : RegistrationError
 }
 ```
 
-Errors are not wrapped, so these types reach the error mapper unchanged. Keep `WorkflowError` inside the workflow layer when possible. At the application boundary, map it to the error type your caller expects:
+At the application boundary, map each `Failure` to the error type your caller expects. Because the hierarchy is sealed, the `when` needs no `else`:
 
 ```kotlin
-useCase(
-  name = "RegisterUser",
-  errors = { error -> error.toApplicationError() },
-) {
+fun toApplicationError(failure: Failure<RegistrationError>): ApplicationError = when (failure) {
+  is Failure.Raised -> when (val error = failure.error) {
+    RegistrationError.EmailTaken -> ApplicationError.Conflict
+    is RegistrationError.WeakPassword -> ApplicationError.Invalid(error.reason)
+  }
+  is Failure.Unexpected -> ApplicationError.Internal
+}
+
+useCase(name = "RegisterUser", errors = ::toApplicationError) {
   // ...
 }
 ```
 
-The mapper should be total and non-throwing. If you want raw workflow errors, omit `errors`.
+The mapper should be total and non-throwing. If callers can work with the `Failure` itself, omit `errors`.
 
 ## Testing
 

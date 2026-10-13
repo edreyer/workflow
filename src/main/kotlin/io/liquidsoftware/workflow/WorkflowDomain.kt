@@ -5,19 +5,18 @@ import java.util.UUID
 import kotlin.time.Duration
 
 /**
- * A domain fact emitted while a use case runs.
+ * Marks a domain fact emitted while a use case runs. It requires no members, so events carry only
+ * the fields your domain needs.
  */
-public interface Event {
-  public val id: UUID
-  public val timestamp: Instant
-}
+public interface Event
 
 /**
- * Convenience base type for events with a generated [id] and [timestamp].
+ * Optional base type for events that want a generated [id] and [timestamp]. Pass your own values
+ * to use an injected clock or ID generator.
  */
 public abstract class BaseEvent(
-  final override val id: UUID = UUID.randomUUID(),
-  final override val timestamp: Instant = Instant.now(),
+  public val id: UUID = UUID.randomUUID(),
+  public val timestamp: Instant = Instant.now(),
 ) : Event
 
 /**
@@ -58,7 +57,8 @@ public class Key<T : Any>(public val name: String) {
 
 /**
  * Immutable, typed metadata that flows through a use case, such as a correlation ID or feature
- * flags. Steps read it through [WorkflowStepScope.context] and add to it with [WorkflowStepScope.put].
+ * flags. Pass it when invoking the use case; steps read it through [WorkflowStepScope.context]. Data
+ * that steps produce belongs in the typed state, not here.
  */
 public class WorkflowContext private constructor(
   private val data: Map<Key<*>, Any>,
@@ -79,13 +79,6 @@ public class WorkflowContext private constructor(
   public operator fun plus(other: WorkflowContext): WorkflowContext =
     if (other.data.isEmpty()) this else WorkflowContext(data + other.data)
 
-  /**
-   * The entries that differ from [base]. Merging only these keeps a stale copy of an untouched key
-   * from overwriting a newer value.
-   */
-  internal fun changesSince(base: WorkflowContext): WorkflowContext =
-    if (this === base) WorkflowContext() else WorkflowContext(data.filter { (key, value) -> base.data[key] != value })
-
   override fun equals(other: Any?): Boolean = other is WorkflowContext && other.data == data
   override fun hashCode(): Int = data.hashCode()
   override fun toString(): String = "WorkflowContext(keys=${data.keys})"
@@ -105,17 +98,13 @@ public class WorkflowContext private constructor(
 
 /**
  * The outcome of running a workflow step on its own: the new state, the events the step emitted,
- * and the context it produced.
+ * and the context it ran with.
  */
 public data class WorkflowResult<out S>(
   val state: S,
   val events: List<Event> = emptyList(),
   val context: WorkflowContext = WorkflowContext(),
 )
-
-/** This result with only the context entries that differ from [base]. */
-internal fun <S> WorkflowResult<S>.changesSince(base: WorkflowContext): WorkflowResult<S> =
-  copy(context = context.changesSince(base))
 
 /**
  * One workflow step run, recorded for logging and [UseCaseSummary].
@@ -133,58 +122,36 @@ public data class WorkflowExecution(
 )
 
 /**
- * A failure raised by a workflow step, `startWith`, or a result projection.
- *
- * The library's own errors are nested here. Applications can also implement this interface with
- * their own sealed error types and raise them directly from steps; they reach the `errors` mapper
- * of `useCase` unchanged.
+ * Why a use case or step failed: an application error that was raised, or an exception nobody
+ * expected. The `errors` mapper of `useCase` receives one, so its `when` can be exhaustive:
  *
  * ```kotlin
- * sealed interface OrderError : WorkflowError {
- *   data object OutOfStock : OrderError
- *   data class PaymentDeclined(val reason: String) : OrderError
+ * fun toApiError(failure: Failure<OrderError>): ApiError = when (failure) {
+ *   is Failure.Raised -> when (val error = failure.error) {
+ *     OrderError.EmptyOrder -> ApiError.BadRequest("Order has no items")
+ *     is OrderError.PaymentDeclined -> ApiError.PaymentRequired(error.reason)
+ *   }
+ *   is Failure.Unexpected -> ApiError.Internal
  * }
  * ```
  */
-public interface WorkflowError {
-  /**
-   * Stable, non-sensitive identifier used in logs and summaries. Defaults to the class name.
-   */
-  public val code: String
-    get() = this::class.simpleName ?: "WorkflowError"
+public sealed interface Failure<out E> {
+  /** A step, `startWith`, or `result` raised [error]. */
+  public data class Raised<out E>(val error: E) : Failure<E>
 
   /**
-   * Human-readable description. It may contain user data, so summaries redact it unless asked not to.
+   * A step, `startWith`, or `result` threw [cause]. A use case assembled in a way that cannot run
+   * fails with a [WorkflowCompositionException] as the cause.
    */
-  public val message: String
-    get() = code
-
-  /** Input that failed validation. */
-  public data class ValidationError(override val message: String) : WorkflowError
-
-  /** A step could not complete. */
-  public data class ExecutionError(override val message: String) : WorkflowError
-
-  /** A business rule failed. Prefer your own [WorkflowError] types when you need structure. */
-  public data class DomainError(
-    override val code: String,
-    override val message: String,
-    val metadata: Map<String, String> = emptyMap(),
-  ) : WorkflowError
-
-  /** A step, `startWith`, or projection threw. */
-  public data class ExceptionError(override val message: String, val ex: Throwable) : WorkflowError
-
-  /** The use case was assembled in a way that cannot run, such as a missing expected event. */
-  public data class CompositionError(override val message: String) : WorkflowError
+  public data class Unexpected(val cause: Throwable) : Failure<Nothing>
 }
 
 /**
- * Kept so 0.8.x error mappers still compile. Step errors are no longer wrapped, so this returns
- * the error unchanged.
+ * The use case was assembled in a way that cannot run, such as a `requireEvent` for an event no step
+ * emits, or a `startWith` that returns an `Either`. It is a programmer error, so it reaches the
+ * `errors` mapper as the cause of a [Failure.Unexpected], and summaries report its class name.
  */
-@Deprecated("Step errors are no longer wrapped. Use the error directly.", ReplaceWith("this"))
-public fun WorkflowError.rootCause(): WorkflowError = this
+public class WorkflowCompositionException(message: String) : IllegalStateException(message)
 
 /**
  * Former marker for workflow state. Any type can now be workflow state.

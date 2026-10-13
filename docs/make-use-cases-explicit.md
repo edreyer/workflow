@@ -25,7 +25,7 @@ As an application grows, those business flows often get fragmented across servic
 ## Example
 
 ```kotlin
-val processOrder: UseCase<ProcessOrderCommand, WorkflowError, OrderReceipt> = useCase(name = "ProcessOrder") {
+val processOrder: UseCase<ProcessOrderCommand, Failure<OrderError>, OrderReceipt> = useCase(name = "ProcessOrder") {
   startWith { command ->
     OrderDraft(
       orderId = command.orderId,
@@ -34,8 +34,8 @@ val processOrder: UseCase<ProcessOrderCommand, WorkflowError, OrderReceipt> = us
       shippingAddress = command.shippingAddress,
     )
   }
-    .then(ValidateOrderWorkflow())
-    .parallelJoin(CalculateSubtotalWorkflow(), CalculateTaxWorkflow()) { subtotal, tax ->
+    .then(validateOrder)
+    .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
       PricedOrder(
         order = this, // the validated order
         subtotal = subtotal.amount,
@@ -43,11 +43,9 @@ val processOrder: UseCase<ProcessOrderCommand, WorkflowError, OrderReceipt> = us
         total = subtotal.amount + tax.amount,
       )
     }
-    .parallel(CheckInventoryWorkflow(inventory), ProcessPaymentWorkflow(payments))
-    .thenIf(PrepareShipmentWorkflow(shipping)) {
-      val paymentSuccessful = events.lastEvent<PaymentProcessedEvent>()?.payment is SuccessfulPayment
-      context[Keys.INVENTORY_AVAILABLE] == true && paymentSuccessful
-    }
+    .then(checkInventory(inventory)) // records inventoryAvailable on the order
+    .then(processPayment(payments))
+    .thenIf(prepareShipment(shipping)) { order -> order.inventoryAvailable }
     .result { order -> order.toReceipt() }
 }
 ```
@@ -57,8 +55,8 @@ This reads like the use case itself:
 1. Start from a command.
 2. Validate the order.
 3. Calculate subtotal and tax in parallel.
-4. Check inventory and process payment in parallel.
-5. Prepare shipment only if the business conditions are met.
+4. Check inventory, then process the payment.
+5. Prepare shipment only if the items are in stock.
 
 ## Advantages
 
@@ -66,8 +64,8 @@ This reads like the use case itself:
 - Typed state transitions: each workflow step declares what it accepts and what it returns, and the compiler checks that each step accepts the previous step's output.
 - Composable steps: build complex behavior from small workflows with clear responsibilities.
 - Built-in flow control: sequence, branch, and parallelize without ad hoc orchestration code.
-- Predictable error handling: workflows raise typed errors, including your own `WorkflowError` types, instead of relying on implicit exception flow.
-- Shared context and events: carry metadata and emitted domain events through the use case.
+- Predictable error handling: workflows raise your own sealed error types instead of relying on implicit exception flow, and the boundary maps them exhaustively.
+- Context and events: carry request metadata such as a correlation ID through the use case, and record domain events as it runs.
 - Better testability: test individual workflows in isolation and test the full use case as a composed unit.
 
 If your service layer is turning into a web of hidden business logic, `workflow` gives you a way to model what your application does directly in code.
@@ -81,7 +79,7 @@ The `useCase` builder handles the boundary directly:
 - accept public input
 - define the workflow steps
 - choose whether the public result comes from the final state, an emitted event, or the context
-- map `WorkflowError` into a boundary error type
+- map each `Failure` into a boundary error type
 - map the final internal result into a public output
 
 That means the same use case stays explicit all the way out to the application edge:
@@ -90,11 +88,11 @@ That means the same use case stays explicit all the way out to the application e
 val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
   useCase(
     name = "RegisterUser",
-    errors = WorkflowError::toApplicationError,
+    errors = ::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { state -> state.user.toDto() }
   }
 ```
@@ -118,50 +116,50 @@ Use `useCase` when application code needs a callable use case with public input,
 
 ## State Projection
 
-Use `useCase(errors = ...) { ... }` with `.result { state -> ... }` when the public result comes from the final workflow state and errors should be mapped to an application type.
+Use `useCase(name, errors = ...) { ... }` with `.result { state -> ... }` when the public result comes from the final workflow state and errors should be mapped to an application type.
 
 ```kotlin
 val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
   useCase(
     name = "RegisterUser",
-    errors = WorkflowError::toApplicationError,
+    errors = ::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { state -> state.user.toDto() }
   }
 ```
 
-If raw workflow errors are acceptable, omit `errors = ...`:
+If callers can work with the `Failure` itself, omit `errors = ...`:
 
 ```kotlin
-val registerUser: UseCase<RegisterUserCommand, WorkflowError, UserDto> =
+val registerUser: UseCase<RegisterUserCommand, Failure<RegistrationError>, UserDto> =
   useCase(name = "RegisterUser") {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { state -> state.user.toDto() }
   }
 ```
 
-The `errors = ...` mapper is expected to be total and non-throwing. It receives errors exactly as they were raised, including your own `WorkflowError` types. If you want to preserve raw workflow errors, omit it.
+The `errors = ...` mapper is expected to be total and non-throwing. It receives a `Failure.Raised` with your error exactly as it was raised, or a `Failure.Unexpected` for an exception. If you want to keep the `Failure`, omit it.
 
 ## Event Projection
 
 Use `requireEvent<EventType>()` inside `.result { }` when the public result is driven by an emitted event.
 
-It returns the last emitted event of the requested type, or fails the use case with `WorkflowError.CompositionError` when none was emitted.
+It returns the last emitted event of the requested type, or fails the use case with `Failure.Unexpected`, caused by a `WorkflowCompositionException`, when none was emitted.
 
 ```kotlin
 val registerUserCreatedEvent: UseCase<RegisterUserCommand, ApplicationError, UserCreatedEvent> =
   useCase(
     name = "RegisterUser",
-    errors = WorkflowError::toApplicationError,
+    errors = ::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { requireEvent<UserCreatedEvent>() }
   }
 ```
