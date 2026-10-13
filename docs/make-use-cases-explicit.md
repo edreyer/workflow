@@ -34,8 +34,8 @@ val processOrder: UseCase<ProcessOrderCommand, Failure<OrderError>, OrderReceipt
       shippingAddress = command.shippingAddress,
     )
   }
-    .then(ValidateOrderWorkflow())
-    .parallelJoin(CalculateSubtotalWorkflow(), CalculateTaxWorkflow()) { subtotal, tax ->
+    .then(validateOrder)
+    .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
       PricedOrder(
         order = this, // the validated order
         subtotal = subtotal.amount,
@@ -43,11 +43,9 @@ val processOrder: UseCase<ProcessOrderCommand, Failure<OrderError>, OrderReceipt
         total = subtotal.amount + tax.amount,
       )
     }
-    .parallel(CheckInventoryWorkflow(inventory), ProcessPaymentWorkflow(payments))
-    .thenIf(PrepareShipmentWorkflow(shipping)) {
-      val paymentSuccessful = events.lastEvent<PaymentProcessedEvent>()?.payment is SuccessfulPayment
-      context[Keys.INVENTORY_AVAILABLE] == true && paymentSuccessful
-    }
+    .then(checkInventory(inventory)) // records inventoryAvailable on the order
+    .then(processPayment(payments))
+    .thenIf(prepareShipment(shipping)) { order -> order.inventoryAvailable }
     .result { order -> order.toReceipt() }
 }
 ```
@@ -57,8 +55,8 @@ This reads like the use case itself:
 1. Start from a command.
 2. Validate the order.
 3. Calculate subtotal and tax in parallel.
-4. Check inventory and process payment in parallel.
-5. Prepare shipment only if the business conditions are met.
+4. Check inventory, then process the payment.
+5. Prepare shipment only if the items are in stock.
 
 ## Advantages
 
@@ -67,7 +65,7 @@ This reads like the use case itself:
 - Composable steps: build complex behavior from small workflows with clear responsibilities.
 - Built-in flow control: sequence, branch, and parallelize without ad hoc orchestration code.
 - Predictable error handling: workflows raise your own sealed error types instead of relying on implicit exception flow, and the boundary maps them exhaustively.
-- Shared context and events: carry metadata and emitted domain events through the use case.
+- Context and events: carry request metadata such as a correlation ID through the use case, and record domain events as it runs.
 - Better testability: test individual workflows in isolation and test the full use case as a composed unit.
 
 If your service layer is turning into a web of hidden business logic, `workflow` gives you a way to model what your application does directly in code.
@@ -93,8 +91,8 @@ val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
     errors = ::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { state -> state.user.toDto() }
   }
 ```
@@ -127,8 +125,8 @@ val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
     errors = ::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { state -> state.user.toDto() }
   }
 ```
@@ -139,8 +137,8 @@ If callers can work with the `Failure` itself, omit `errors = ...`:
 val registerUser: UseCase<RegisterUserCommand, Failure<RegistrationError>, UserDto> =
   useCase(name = "RegisterUser") {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { state -> state.user.toDto() }
   }
 ```
@@ -160,8 +158,8 @@ val registerUserCreatedEvent: UseCase<RegisterUserCommand, ApplicationError, Use
     errors = ::toApplicationError,
   ) {
     startWith { command -> command.toValidatedState() }
-      .then(HashPasswordStep(passwordHasher))
-      .then(PersistUserStep(userRepository, userIdGenerator))
+      .then(hashPassword(passwordHasher))
+      .then(persistUser(userRepository, userIdGenerator))
       .result { requireEvent<UserCreatedEvent>() }
   }
 ```

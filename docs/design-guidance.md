@@ -89,8 +89,8 @@ Use `useCase` at application/module boundaries. It keeps boundary concerns in on
 val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =
   useCase(name = "RegisterUser", errors = ::toApplicationError) {
     startWith { command -> command.toInitialState() }
-      .then(ValidateRegistration())
-      .then(CreateUser(users))
+      .then(validateRegistration)
+      .then(createUser(users))
       .result { user -> user.toDto() }
   }
 ```
@@ -102,7 +102,7 @@ The `result { }` block can also read the pipeline's `events` and `context` when 
 Use `parallelJoin` for independent state-producing workflows:
 
 ```kotlin
-.parallelJoin(CalculateSubtotal(), CalculateTax()) { subtotal, tax ->
+.parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
   PricedOrder(
     orderId = orderId, // `this` is the current state
     subtotal = subtotal.amount,
@@ -114,7 +114,7 @@ Use `parallelJoin` for independent state-producing workflows:
 Use `parallel(...)` when the workflows are side effects and the current state should continue unchanged:
 
 ```kotlin
-.parallel(SendReceiptEmail(), PublishPaymentEvent())
+.parallel(sendReceiptEmail, publishPaymentEvent)
 ```
 
 Use `thenLaunch` only when the side effect does not need to complete before the main chain continues. Add `awaitLaunched()` if later steps need launched events/context; anything still running when the pipeline ends is awaited before `result { }` runs.
