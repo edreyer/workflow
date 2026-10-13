@@ -7,15 +7,15 @@ This document covers the public API. Start with the [README](../Readme.md) if yo
 | Type | Purpose |
 | --- | --- |
 | `UseCase<I, E, O>` | Public callable application use case. Accepts input `I`, returns `Either<E, O>`. |
-| `Pipeline<I, E, S>` | Immutable, typed chain of steps built inside `useCase { }`. `S` is the current state type. |
-| `Workflow<I, O>` | A named step from input state `I` to output state `O`, built with `workflow(id) { }` or inline with `.then(id) { }`. |
-| `WorkflowStepScope` | Receiver of a step: raise errors, read `context`, `emit` events. |
+| `Pipeline<I, E, S>` | Immutable, typed chain of steps built inside `useCase { }`. `E` is the error type its steps raise; `S` is the current state type. |
+| `Workflow<I, O, E>` | A named step from input state `I` to output state `O` that can raise `E`, built with `workflow(id) { }` or inline with `.then(id) { }`. |
+| `WorkflowStepScope<E>` | Receiver of a step: raise `E`, read `context`, `emit` events. |
 | `WorkflowResult<S>` | State, events, and context: the outcome of a step run on its own, and the receiver of `thenIf` predicates. |
-| `ResultScope<S>` | Receiver of `result { }`: final events and context, plus `requireEvent<T>()`. |
+| `ResultScope<S, E>` | Receiver of `result { }`: final events and context, plus `requireEvent<T>()`. |
 | `Event` | Marker for a domain event emitted during execution. It requires no members; extend `BaseEvent` to get a generated `id` and `timestamp`. |
 | `WorkflowContext` | Immutable, typed metadata that flows through the use case. |
 | `Key<T>` | Typed key for a `WorkflowContext` value. |
-| `WorkflowError` | Error interface. The library's errors are nested in it; applications can implement it. |
+| `Failure<E>` | Why a use case or step failed: `Failure.Raised(error)` or `Failure.Unexpected(cause)`. |
 | `UseCaseSummary` | Per-invocation summary passed to `onSummary` listeners. |
 
 Any type can be use case input or workflow state. The old `UseCaseCommand` and `WorkflowState` marker interfaces are deprecated and no longer needed; remove them from your types.
@@ -34,10 +34,10 @@ val placeOrder: UseCase<PlaceOrder, ApplicationError, OrderDto> =
   }
 ```
 
-If callers can work with raw workflow errors, omit `errors`. The use case then returns `WorkflowError`:
+The mapper's parameter type, such as `Failure<OrderError>`, sets the error type every step must raise. If callers can work with the failure itself, omit `errors`. The use case then returns `Failure<OrderError>`:
 
 ```kotlin
-val placeOrder: UseCase<PlaceOrder, WorkflowError, OrderDto> =
+val placeOrder: UseCase<PlaceOrder, Failure<OrderError>, OrderDto> =
   useCase(name = "PlaceOrder") {
     startWith { command -> OrderDraft(command.id, command.items) }
       .then(validateOrder)
@@ -45,7 +45,7 @@ val placeOrder: UseCase<PlaceOrder, WorkflowError, OrderDto> =
   }
 ```
 
-Kotlin cannot infer the input type from the block, so either declare the expected type as above or pass type arguments: `useCase<PlaceOrder, OrderDto>("PlaceOrder") { ... }`, or `useCase<PlaceOrder, ApplicationError, OrderDto>("PlaceOrder", errors = ...) { ... }`.
+Kotlin cannot infer the input type from the block, so either declare the expected type as above or pass type arguments: `useCase<PlaceOrder, OrderError, OrderDto>("PlaceOrder") { ... }`, or `useCase<PlaceOrder, OrderError, ApplicationError, OrderDto>("PlaceOrder", errors = ...) { ... }`. When `errors` is a function reference or a lambda with a typed parameter, the error type is inferred from it.
 
 `name` is required: a stable operational name used in logs and summaries. Do not include user or request data.
 
@@ -66,7 +66,7 @@ This example shows the pipeline methods together. Each method returns a new `Pip
 val registerUser: UseCase<RegisterUserCommand, RegisterUserError, UserDto> =
   useCase(name = "RegisterUser", errors = ::toRegisterUserError) {
     startWith { command ->
-      ensure(command.email.isNotBlank()) { WorkflowError.ValidationError("Email is required") }
+      ensure(command.email.isNotBlank()) { RegistrationError.EmailRequired }
       RegistrationDraft(command.email, command.password)
     }
       .then(validateRegistration)                       // RegistrationDraft -> ValidRegistration
@@ -81,9 +81,8 @@ val registerUser: UseCase<RegisterUserCommand, RegisterUserError, UserDto> =
       .logging {
         success { (user) -> field("userId", user.id) }
         success { result -> field("eventId", result.events.lastEvent<UserRegisteredEvent>()?.id) }
-        failure { error ->
-          field("reason", error.reason)
-          field("retryable", error.retryable)
+        failure { failure ->
+          field("unexpected", failure is Failure.Unexpected)
         }
       }
   }
@@ -110,14 +109,14 @@ Converts public input into the first workflow state:
 
 ```kotlin
 startWith { command: RegisterUserCommand ->
-  ensure(command.email.isNotBlank()) { WorkflowError.ValidationError("Email is required") }
+  ensure(command.email.isNotBlank()) { RegistrationError.EmailRequired }
   RegistrationDraft(command.email, command.password)
 }
 ```
 
-The block runs with an Arrow `Raise<WorkflowError>` receiver. Return the state directly, and fail with `ensure`, `ensureNotNull`, `raise`, or `bind()`. Exceptions thrown by the block become `WorkflowError.ExceptionError`.
+The block runs with an Arrow `Raise<E>` receiver, where `E` is the use case's error type. Return the state directly, and fail with `ensure`, `ensureNotNull`, `raise`, or `bind()`. Exceptions thrown by the block become `Failure.Unexpected`.
 
-If the block produces an `Either`, call `.bind()` on it. Returning the `Either` itself fails the use case with `WorkflowError.CompositionError` instead of making the `Either` the state.
+If the block produces an `Either`, call `.bind()` on it. Returning the `Either` itself fails the use case with `Failure.Unexpected` instead of making the `Either` the state.
 
 ### `then`
 
@@ -129,7 +128,7 @@ Runs a step on the current state. Its output becomes the new state. Write the st
 .then(createUser(users))
 ```
 
-A reusable step must be a `Workflow<S, O>` where `S` is the current state type. A mismatch is a compile error.
+A reusable step must be a `Workflow<S, O, E>` where `S` is the current state type and `E` is the pipeline's error type, a subtype of it, or `Nothing`. A mismatch is a compile error.
 
 ### `guard`
 
@@ -147,7 +146,7 @@ Runs a workflow only when a predicate matches:
 .thenIf(sendWelcomeEmail) { user -> user.marketingOptIn && context[FeatureFlags.WELCOME_EMAIL] == true }
 ```
 
-The predicate receives the current state as its parameter and a `WorkflowResult<S>` as its receiver, so `state`, `events`, and `context` are available. Because the step may be skipped, it must be a `Workflow<S, S>`. Keep predicates small and side-effect free. Exceptions thrown by the predicate become `WorkflowError.ExceptionError`.
+The predicate receives the current state as its parameter and a `WorkflowResult<S>` as its receiver, so `state`, `events`, and `context` are available. Because the step may be skipped, it must be a `Workflow<S, S, E>`. Keep predicates small and side-effect free. Exceptions thrown by the predicate become `Failure.Unexpected`.
 
 ### `parallel`
 
@@ -176,10 +175,10 @@ There are overloads for 2 through 8 workflows. The current state is the receiver
 
 Branches run with the same starting context. Each branch only merges the context keys it changed, and branches that succeeded are kept (their events count in the summary) even when another branch fails.
 
-`parallelJoin` is also a top-level function that returns a `Workflow<I, R>`. Use it to name a join or reuse it:
+`parallelJoin` is also a top-level function that returns a `Workflow<I, R, E>`. Use it to name a join or reuse it:
 
 ```kotlin
-val priceOrder: Workflow<ValidatedOrder, PricedOrder> =
+val priceOrder: Workflow<ValidatedOrder, PricedOrder, OrderError> =
   parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
     PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the input
   }
@@ -203,7 +202,7 @@ startWith { command -> command.toValidatedOrder() }
 
 `awaitLaunched()` waits for everything launched so far and merges its events. Use it when later steps or the result need them. Work that is still running when the pipeline ends is awaited and merged before `result { }` runs, so `awaitLaunched()` at the very end is not required.
 
-A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and `message`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
+A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and a `message` free of user data: the raised error's class name, `An exception occurred`, or `thenLaunch timeout: <id>`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
 
 Launched work runs inside the use case invocation. Cancelling the caller cancels it too.
 
@@ -215,14 +214,14 @@ Launched work runs inside the use case invocation. Cancelling the caller cancels
 .result { user -> UserDto(user.id, user.email) }
 ```
 
-The block's receiver is a `ResultScope<S>`, which is an Arrow `Raise<WorkflowError>` and also exposes:
+The block's receiver is a `ResultScope<S, E>`, which is an Arrow `Raise<E>` and also exposes:
 
 | Member | Purpose |
 | --- | --- |
 | `events` | Every event emitted by the pipeline, in order. |
 | `context` | The final context. |
 | `result` | The final `WorkflowResult<S>` (state, events, context). |
-| `requireEvent<T>()` | The last event of type `T`, or raises `WorkflowError.CompositionError` when none was emitted. |
+| `requireEvent<T>()` | The last event of type `T`. When none was emitted the use case was assembled wrongly, so it fails with `Failure.Unexpected`. |
 
 Combine them as needed:
 
@@ -234,7 +233,7 @@ Combine them as needed:
 .result { requireEvent<UserRegisteredEvent>() }
 ```
 
-Exceptions thrown by the block become `WorkflowError.ExceptionError`.
+Exceptions thrown by the block become `Failure.Unexpected`.
 
 ## Writing Workflows
 
@@ -248,16 +247,16 @@ Steps are functions; you never implement `Workflow` yourself. Write steps inline
 Or define a reusable step with the `workflow` function:
 
 ```kotlin
-val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
-  ensure(draft.items.isNotEmpty()) { WorkflowError.ValidationError("Order has no items") }
+val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-order") { draft ->
+  ensure(draft.items.isNotEmpty()) { OrderError.EmptyOrder }
   emit(OrderValidated(draft.orderId))
   ValidatedOrder(draft.orderId, draft.items)
 }
 ```
 
-`id` is a stable identifier used in execution history, logs, and summaries. `parallel`, `parallelJoin`, `thenIf` and `thenLaunch` take reusable steps.
+`id` is a stable identifier used in execution history, logs, and summaries. The third type argument is the error type the step can raise; use `Nothing` for a step that never raises. Inline steps take the pipeline's error type, so they need no type arguments. `parallel`, `parallelJoin`, `thenIf` and `thenLaunch` take reusable steps.
 
-Business logic belongs in ordinary functions that don't depend on this library. A function that can fail declares an Arrow `Raise` context parameter, and any step block can call it, because the block is a `Raise<WorkflowError>`:
+Business logic belongs in ordinary functions that don't depend on this library. A function that can fail declares an Arrow `Raise` context parameter, and any step block with that error type can call it, because the block is a `Raise<OrderError>`:
 
 ```kotlin
 class Inventory(private val stock: StockClient) {
@@ -274,26 +273,26 @@ Inside `context(_: Raise<...>)` functions, import `ensure` and `ensureNotNull` f
 Use `guard` for a reusable step that only checks its input and passes it on unchanged:
 
 ```kotlin
-val authorize = guard<PlaceOrder>("authorize") { command ->
+val authorize = guard<PlaceOrder, OrderError>("authorize") { command ->
   ensure(command.customer.canOrder) { OrderError.NotAllowed }
 }
 ```
 
-`WorkflowStepScope` is an Arrow `Raise<WorkflowError>`. It also provides:
+`WorkflowStepScope<E>` is an Arrow `Raise<E>`. It also provides:
 
 | Member | Purpose |
 | --- | --- |
 | `context` | The request metadata the use case was invoked with. Read-only. |
 | `emit(event)` | Records a domain event. Safe to call from coroutines launched inside the step. |
 
-Data a step produces for later steps belongs in the state it returns, not in the context. Exceptions thrown by a step become `WorkflowError.ExceptionError`.
+Data a step produces for later steps belongs in the state it returns, not in the context. Exceptions thrown by a step become `Failure.Unexpected`.
 
 ### Running A Step On Its Own
 
 Call a workflow directly to unit-test it:
 
 ```kotlin
-val result: Either<WorkflowError, WorkflowResult<ValidatedOrder>> =
+val result: Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>> =
   validateOrder(OrderDraft(orderId, items), WorkflowContext())
 ```
 
@@ -301,41 +300,38 @@ The context argument is optional. The `WorkflowResult` holds the new `state`, th
 
 ## Error Handling
 
-`WorkflowError` is an open interface with two properties:
-
-| Property | Purpose |
-| --- | --- |
-| `code` | Stable, non-sensitive identifier used in logs and summaries. Defaults to the class name. |
-| `message` | Human-readable description. May contain user data. Defaults to `code`. |
-
-The library's own errors are nested in it:
-
-| Error | Use for |
-| --- | --- |
-| `ValidationError(message)` | Input or state validation failure. |
-| `ExecutionError(message)` | Expected technical failure while running a step. Also used for `thenLaunch` timeouts. |
-| `DomainError(code, message, metadata)` | Business rule failure with a stable code and optional metadata. |
-| `ExceptionError(message, ex)` | Exception thrown by a step, `startWith`, a predicate, or `result { }`. |
-| `CompositionError(message)` | A use case that cannot produce its result, such as a missing event in `requireEvent`. |
-
-Applications can implement `WorkflowError` with their own sealed types and raise them from steps:
+Error types are your own; they need no library supertype. A sealed hierarchy works best:
 
 ```kotlin
-sealed interface OrderError : WorkflowError {
+sealed interface OrderError {
   data object EmptyOrder : OrderError
   data class PaymentDeclined(val reason: String) : OrderError
 }
 ```
 
-Errors are not wrapped. The `errors` mapper receives the error exactly as it was raised, so you can match on your own types:
+Every step of a pipeline raises the pipeline's error type `E`, a subtype of it, or `Nothing`. A step whose error type doesn't fit is a compile error. Adapt a step written for another error type with `mapError`, which keeps its `id`:
 
 ```kotlin
-private fun toApiError(error: WorkflowError): ApiError =
-  when (error) {
-    OrderError.EmptyOrder -> ApiError(400, "empty-order")
-    is OrderError.PaymentDeclined -> ApiError(402, "payment-declined")
-    is WorkflowError.ValidationError -> ApiError(400, "invalid")
-    else -> ApiError(500, "internal")
+.then(chargeCard.mapError { e: PaymentError -> OrderError.PaymentDeclined(e.reason) })
+```
+
+A failed use case or step reports a `Failure<E>`:
+
+| Case | Meaning |
+| --- | --- |
+| `Failure.Raised(error)` | A step, `startWith`, or `result { }` raised `error`. |
+| `Failure.Unexpected(cause)` | Something threw: a step, `startWith`, a predicate, or `result { }`. This includes a step's own timeout, a missing `requireEvent`, a `startWith` that returned an `Either`, and a `thenLaunch` timeout. |
+
+The `errors` mapper receives the `Failure`, so its `when` is exhaustive with no `else`. Adding a case to `OrderError` is a compile error until the mapper handles it:
+
+```kotlin
+private fun toApiError(failure: Failure<OrderError>): ApiError =
+  when (failure) {
+    is Failure.Raised -> when (val error = failure.error) {
+      OrderError.EmptyOrder -> ApiError(400, "empty-order")
+      is OrderError.PaymentDeclined -> ApiError(402, error.reason)
+    }
+    is Failure.Unexpected -> ApiError(500, "internal")
   }
 ```
 
@@ -438,12 +434,12 @@ Per-use-case logging fields are explicit. Chain `.logging { }` after `result { }
 .logging {
   success { result -> field("userId", result.state.id) }
   success { (_, _, context) -> field("tenant", context[Keys.TENANT]) }
-  failure { error -> field("reason", error.reason) }
+  failure { failure -> field("unexpected", failure is Failure.Unexpected) }
 }
 ```
 
 - `success` receives the final `WorkflowResult<S>` (state, events, context) and can be added more than once.
-- `failure` receives the mapped public error `E` and can be set once.
+- `failure` receives the `Failure<E>` of the use case's error type, before the `errors` mapper runs, and can be set once.
 
 Fields are only collected when debug logging is enabled, so field blocks cost nothing otherwise.
 
@@ -463,7 +459,7 @@ Explicit fields cannot be blank or use the reserved built-in names `name`, `outc
 | `launchedFailures` | Messages from `WorkflowContext.LAUNCHED_FAILURES`. |
 | `correlationId` | Value of `WorkflowContext.CORRELATION_ID`, if set. |
 
-`RootErrorInfo` has the error's `type` (class name), `code`, `message`, and the `workflowId` of the failing step when the failure came from a step. Launched side effects never count as the failing step.
+`RootErrorInfo` has the `type` (class name of the raised error, or of the exception), whether the failure was `unexpected`, the `message` (the raised error's `toString()` or the exception's message), and the `workflowId` of the failing step when the failure came from a step. Launched side effects never count as the failing step.
 
 Error messages are redacted by default because they may contain user data, so `rootError.message` is `null`. Use `withErrorMessages()` to get a copy that includes it:
 

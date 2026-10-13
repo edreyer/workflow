@@ -33,21 +33,22 @@ public data class UseCaseSummary(
 /**
  * The error a failed invocation ended with.
  *
- * @property type The error's class name.
- * @property code [WorkflowError.code], a stable non-sensitive identifier.
- * @property message Redacted (`null`) unless [UseCaseSummary.withErrorMessages] was used.
+ * @property type The class name of the raised error, or of the exception for [Failure.Unexpected].
+ * @property unexpected Whether the failure was a [Failure.Unexpected].
+ * @property message The raised error's `toString()` or the exception's message. Redacted (`null`)
+ * unless [UseCaseSummary.withErrorMessages] was used.
  * @property workflowId The step that failed, when the failure came from a step.
  */
 public data class RootErrorInfo(
   val type: String,
-  val code: String,
+  val unexpected: Boolean,
   val message: String?,
   val workflowId: String?,
 )
 
 internal fun buildSummary(
   useCaseName: String,
-  outcome: Either<WorkflowError, *>,
+  outcome: Either<Failure<*>, *>,
   finalResult: WorkflowResult<*>?,
   recorder: ExecutionRecorder,
   initialContext: WorkflowContext,
@@ -64,13 +65,23 @@ internal fun buildSummary(
     executions = executions,
     rootError = error?.let {
       RootErrorInfo(
-        type = it::class.simpleName ?: "WorkflowError",
-        code = it.code,
+        type = it.typeName(),
+        unexpected = it is Failure.Unexpected,
         message = null,
         workflowId = recorder.failedStepId(it),
       )
     },
     launchedFailures = context[WorkflowContext.LAUNCHED_FAILURES].orEmpty(),
     correlationId = context[WorkflowContext.CORRELATION_ID],
-  ).also { it.errorMessage = error?.message }
+  ).also { it.errorMessage = error?.messageText() }
+}
+
+private fun Failure<*>.typeName(): String = when (this) {
+  is Failure.Raised -> error?.let { it::class.simpleName } ?: "null"
+  is Failure.Unexpected -> cause::class.simpleName ?: "Throwable"
+}
+
+private fun Failure<*>.messageText(): String? = when (this) {
+  is Failure.Raised -> error.toString()
+  is Failure.Unexpected -> cause.message
 }

@@ -17,13 +17,13 @@ class ParallelJoinTest {
   data class Priced(val id: String, val subtotal: Int, val tax: Int)
   data class Computed(val name: String) : BaseEvent()
 
-  private val subtotal = workflow<Order, Subtotal>("subtotal") { order ->
+  private val subtotal = workflow<Order, Subtotal, Nothing>("subtotal") { order ->
     delay(20)
     emit(Computed("subtotal"))
     Subtotal(order.amount)
   }
 
-  private val tax = workflow<Order, Tax>("tax") { order ->
+  private val tax = workflow<Order, Tax, Nothing>("tax") { order ->
     emit(Computed("tax"))
     Tax(order.amount / 10)
   }
@@ -40,41 +40,41 @@ class ParallelJoinTest {
 
   @Test
   fun `WaitAll returns the first error by parameter order`() = runTest {
-    val slowFailure = workflow<Order, Subtotal>("slow-failure") {
+    val slowFailure = workflow<Order, Subtotal, String>("slow-failure") {
       delay(50)
-      raise(WorkflowError.ExecutionError("first"))
+      raise("first")
     }
-    val fastFailure = workflow<Order, Tax>("fast-failure") { raise(WorkflowError.ExecutionError("second")) }
+    val fastFailure = workflow<Order, Tax, String>("fast-failure") { raise("second") }
 
     val result = parallelJoin(slowFailure, fastFailure) { _, _ -> Unit }(Order("o", 1))
 
-    assertEquals(Either.Left(WorkflowError.ExecutionError("first")), result)
+    assertEquals(Either.Left(Failure.Raised("first")), result)
   }
 
   @Test
   fun `FailFast cancels the remaining branches`() = runTest {
     var slowFinished = false
-    val slow = workflow<Order, Subtotal>("slow") {
+    val slow = workflow<Order, Subtotal, Nothing>("slow") {
       try {
         awaitCancellation()
       } finally {
         slowFinished = true
       }
     }
-    val failing = workflow<Order, Tax>("failing") { raise(WorkflowError.ExecutionError("boom")) }
+    val failing = workflow<Order, Tax, String>("failing") { raise("boom") }
 
     val result = parallelJoin(slow, failing, ParallelErrorPolicy.FailFast) { _, _ -> Unit }(Order("o", 1))
 
-    assertEquals(Either.Left(WorkflowError.ExecutionError("boom")), result)
+    assertEquals(Either.Left(Failure.Raised("boom")), result)
     assertTrue(slowFinished)
   }
 
   @Test
   fun `parallelJoin in a pipeline is type checked against the current state`() = runTest {
-    val useCase: UseCase<Order, WorkflowError, Int> = useCase("Test") {
+    val useCase: UseCase<Order, Failure<Nothing>, Int> = useCase("Test") {
       startWith { it }
         .parallelJoin(subtotal, tax) { s, t -> s.amount + t.amount }
-        .then(workflow<Int, Int>("double") { it * 2 })
+        .then(workflow<Int, Int, Nothing>("double") { it * 2 })
         .result { it }
     }
 
@@ -83,7 +83,7 @@ class ParallelJoinTest {
 
   @Test
   fun `supports eight branches`() = runTest {
-    fun n(value: Int) = workflow<Int, Int>("n$value") { it + value }
+    fun n(value: Int) = workflow<Int, Int, Nothing>("n$value") { it + value }
     val join = parallelJoin(n(1), n(2), n(3), n(4), n(5), n(6), n(7), n(8)) { a, b, c, d, e, f, g, h ->
       listOf(a, b, c, d, e, f, g, h)
     }

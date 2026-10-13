@@ -14,7 +14,7 @@ public input -> startWith -> state -> step -> state -> step -> ... -> result -> 
 - Keep workflow steps small, isolated, and testable.
 - Pass typed state between steps. The compiler checks that each step accepts the previous step's output.
 - Compose sequential, conditional, parallel, and launched side-effect work.
-- Fail with typed errors, including your own, using Arrow's `Raise` (`ensure`, `raise`, `bind()`), and get an `Either` back.
+- Fail with your own sealed error types, using Arrow's `Raise` (`ensure`, `raise`, `bind()`), and map them with an exhaustive `when`.
 - Get debug invocation logs and summaries that never include command, state, event, output, or error payloads unless you ask for them.
 
 For the architectural motivation, see [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md).
@@ -25,8 +25,8 @@ For the architectural motivation, see [Make the Use Cases of Your App Explicit](
 import arrow.core.Either
 import arrow.core.raise.ensure
 import io.liquidsoftware.workflow.BaseEvent
+import io.liquidsoftware.workflow.Failure
 import io.liquidsoftware.workflow.UseCase
-import io.liquidsoftware.workflow.WorkflowError
 import io.liquidsoftware.workflow.useCase
 import io.liquidsoftware.workflow.workflow
 import java.util.UUID
@@ -37,14 +37,15 @@ data class RegisteredUser(val id: UUID, val email: String)
 data class UserDto(val id: UUID, val email: String)
 data class UserRegistered(val userId: UUID) : BaseEvent()
 
-sealed interface RegistrationError : WorkflowError {
+sealed interface RegistrationError {
+  data object EmailRequired : RegistrationError
   data object EmailTaken : RegistrationError
 }
 
 data class ApiError(val status: Int, val code: String)
 
 fun createUser(users: UserRepository) =
-  workflow<RegistrationDraft, RegisteredUser>("create-user") { draft ->
+  workflow<RegistrationDraft, RegisteredUser, RegistrationError>("create-user") { draft ->
     ensure(!users.exists(draft.email)) { RegistrationError.EmailTaken }
     val user = users.create(draft.email, draft.password)
     emit(UserRegistered(user.id))
@@ -54,16 +55,18 @@ fun createUser(users: UserRepository) =
 fun registerUser(users: UserRepository): UseCase<RegisterUser, ApiError, UserDto> =
   useCase(
     name = "RegisterUser",
-    errors = { error ->
-      when (error) {
-        RegistrationError.EmailTaken -> ApiError(409, "email-taken")
-        is WorkflowError.ValidationError -> ApiError(400, "invalid")
-        else -> ApiError(500, "internal")
+    errors = { failure: Failure<RegistrationError> ->
+      when (failure) {
+        is Failure.Raised -> when (failure.error) {
+          RegistrationError.EmailRequired -> ApiError(400, "invalid")
+          RegistrationError.EmailTaken -> ApiError(409, "email-taken")
+        }
+        is Failure.Unexpected -> ApiError(500, "internal")
       }
     },
   ) {
     startWith { command ->
-      ensure(command.email.isNotBlank()) { WorkflowError.ValidationError("Email is required") }
+      ensure(command.email.isNotBlank()) { RegistrationError.EmailRequired }
       RegistrationDraft(command.email, command.password)
     }
       .then(createUser(users))
@@ -79,7 +82,7 @@ The important part is the shape:
 1. `startWith` converts public input into the first state.
 2. `.then(...)` runs a focused workflow step. It only compiles if the step accepts the current state.
 3. `.result { }` projects the typed final state into public output.
-4. `errors` maps every failure, including your own error types, to the error type your callers expect.
+4. `errors` maps every failure to the error type your callers expect. Because `RegistrationError` is sealed, the `when` has no `else`, and adding an error case is a compile error until it is mapped.
 
 ## Defining Workflow Steps
 
@@ -107,16 +110,16 @@ startWith { command -> OrderDraft(command.orderId, command.items) }
 To name a step once and reuse it, or to pass it to `parallel`, `parallelJoin`, `thenIf` or `thenLaunch`, define it with `workflow`:
 
 ```kotlin
-val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-order") { draft ->
   ensure(draft.items.isNotEmpty()) { OrderError.EmptyOrder }
   emit(OrderValidated(draft.orderId))
   ValidatedOrder(draft.orderId, draft.items)
 }
 ```
 
-`guard<T>("id") { }` builds a reusable pass-through check the same way.
+The third type argument is the error type the step can raise. Use `Nothing` for a step that never raises; it fits any pipeline. `guard<T, OrderError>("id") { }` builds a reusable pass-through check the same way.
 
-Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `WorkflowError.ExceptionError`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<WorkflowError, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
+Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `Failure.Unexpected`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
 
 ## Composing Steps
 
@@ -151,7 +154,7 @@ val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
 | `.result { state -> output }` | Project public output. `events`, `context`, and `requireEvent<T>()` are in scope. Required. |
 | `.logging { success { }; failure { } }` | Add explicit fields to the debug finish log. |
 
-Kotlin needs to know the input type to type `startWith`. Give the use case an explicit type, as above, or pass the type arguments: `useCase<ProcessOrder, ApiError, OrderReceipt>(...) { ... }`.
+Kotlin needs to know the input type to type `startWith`. Give the use case an explicit type, as above, or pass the type arguments: `useCase<ProcessOrder, OrderError, ApiError, OrderReceipt>(...) { ... }`.
 
 For deeper API notes, see the [Workflow Reference](docs/reference.md).
 
@@ -182,16 +185,34 @@ Callers depend on `PlaceOrderUseCase` or `UseCase<PlaceOrder, ApiError, OrderDto
 
 ## Errors
 
-Every failure is a `WorkflowError`. The library provides `ValidationError`, `ExecutionError`, `DomainError`, `ExceptionError` (for anything thrown), and `CompositionError` (for a missing required event). Applications can implement `WorkflowError` with their own sealed types and raise them from any step:
+Error types are your own. Steps raise them, usually from a sealed hierarchy with no library supertype:
 
 ```kotlin
-sealed interface OrderError : WorkflowError {
+sealed interface OrderError {
   data object EmptyOrder : OrderError
   data class PaymentDeclined(val reason: String) : OrderError
 }
 ```
 
-Errors reach the `errors` mapper exactly as they were raised. Omit `errors` to get `UseCase<I, WorkflowError, O>`. The mapper should be total and non-throwing. If it throws, the exception propagates to the caller.
+Every step in a pipeline raises the pipeline's error type, a subtype of it, or `Nothing`. A step written for an unrelated error type is a compile error, like a step that doesn't accept the current state. Adapt it with `mapError`:
+
+```kotlin
+.then(chargeCard.mapError { e: PaymentError -> OrderError.PaymentDeclined(e.reason) })
+```
+
+The `errors` mapper receives a `Failure<OrderError>`: either `Failure.Raised(error)`, or `Failure.Unexpected(cause)` for an exception nobody raised on purpose, which includes a missing `requireEvent`. The mapper's parameter type tells the use case its error type:
+
+```kotlin
+fun toApiError(failure: Failure<OrderError>): ApiError = when (failure) {
+  is Failure.Raised -> when (val error = failure.error) {
+    OrderError.EmptyOrder -> ApiError(400, "empty-order")
+    is OrderError.PaymentDeclined -> ApiError(402, error.reason)
+  }
+  is Failure.Unexpected -> ApiError(500, "internal")
+}
+```
+
+Omit `errors` to get `UseCase<I, Failure<OrderError>, O>`. The mapper should be total and non-throwing. If it throws, the exception propagates to the caller.
 
 The pipeline stops at the first failure.
 
@@ -247,15 +268,15 @@ val appConfig = useCaseConfig {
 val processOrder = useCase("ProcessOrder", errors = ::toApiError, config = appConfig) { ... }
 ```
 
-`onSummary` receives a `UseCaseSummary` after every invocation: name, outcome, duration, event count, executed steps, the failing step and error code, launched failures, and correlation ID. Error messages are redacted unless you call `summary.withErrorMessages()`.
+`onSummary` receives a `UseCaseSummary` after every invocation: name, outcome, duration, event count, executed steps, the failing step and error type, launched failures, and correlation ID. Error messages are redacted unless you call `summary.withErrorMessages()`.
 
-Add per-use-case log fields after `.result`. They are typed to the final result and the mapped error, and are only evaluated when debug logging is enabled:
+Add per-use-case log fields after `.result`. They are typed to the final result and to the `Failure` of the use case's error type, and are only evaluated when debug logging is enabled:
 
 ```kotlin
 .result { user -> UserDto(user.id, user.email) }
 .logging {
   success { (user, events) -> field("userId", user.id) }
-  failure { error -> field("status", error.status) }
+  failure { failure -> field("unexpected", failure is Failure.Unexpected) }
 }
 ```
 

@@ -18,8 +18,9 @@ class WorkflowTest {
   data class Validated(val quantity: Int)
   data class DraftValidated(val quantity: Int) : BaseEvent()
 
-  sealed interface OrderError : WorkflowError {
+  sealed interface OrderError {
     data object EmptyOrder : OrderError
+    data object CouponRequired : OrderError
   }
 
   /** Domain code with no dependency on this library. */
@@ -31,7 +32,7 @@ class WorkflowTest {
     }
   }
 
-  private val validateDraft = workflow<Draft, Validated>("validate-draft") { draft ->
+  private val validateDraft = workflow<Draft, Validated, OrderError>("validate-draft") { draft ->
     DraftValidator().validate(draft).also { emit(DraftValidated(it.quantity)) }
   }
 
@@ -45,14 +46,14 @@ class WorkflowTest {
   }
 
   @Test
-  fun `raised application errors are returned unwrapped`() = runTest {
-    assertEquals(Either.Left(OrderError.EmptyOrder), validateDraft(Draft(0)))
+  fun `raised application errors are returned as Failure Raised`() = runTest {
+    assertEquals(Either.Left(Failure.Raised(OrderError.EmptyOrder)), validateDraft(Draft(0)))
   }
 
   @Test
   fun `lambda workflow can read context`() = runTest {
-    val applyCoupon = workflow<Draft, String>("apply-coupon") { draft ->
-      val coupon = ensureNotNull(draft.coupon) { WorkflowError.ValidationError("coupon required") }
+    val applyCoupon = workflow<Draft, String, OrderError>("apply-coupon") { draft ->
+      val coupon = ensureNotNull(draft.coupon) { OrderError.CouponRequired }
       "$coupon:${context[WorkflowContext.CORRELATION_ID]}"
     }
 
@@ -64,16 +65,16 @@ class WorkflowTest {
   }
 
   @Test
-  fun `thrown exceptions become ExceptionError`() = runTest {
-    val boom = workflow<Draft, Draft>("boom") { error("boom") }
+  fun `thrown exceptions become Failure Unexpected`() = runTest {
+    val boom = workflow<Draft, Draft, Nothing>("boom") { error("boom") }
 
-    val error = assertIs<WorkflowError.ExceptionError>(assertIs<Either.Left<WorkflowError>>(boom(Draft(1))).value)
-    assertEquals("boom", error.ex.message)
+    val failure = assertIs<Failure.Unexpected>(assertIs<Either.Left<Failure<Nothing>>>(boom(Draft(1))).value)
+    assertEquals("boom", failure.cause.message)
   }
 
   @Test
-  fun `emit and put are safe from concurrent coroutines inside a step`() = runTest {
-    val fanOut = workflow<Int, Int>("fan-out") { count ->
+  fun `emit is safe from concurrent coroutines inside a step`() = runTest {
+    val fanOut = workflow<Int, Int, Nothing>("fan-out") { count ->
       coroutineScope {
         (1..count).map { n -> async { emit(DraftValidated(n)) } }.awaitAll()
       }
@@ -86,9 +87,23 @@ class WorkflowTest {
 
   @Test
   fun `workflow input is contravariant so a supertype step fits`() = runTest {
-    val describe: Workflow<Any, String> = workflow("describe") { input -> input.toString() }
-    val forDrafts: Workflow<Draft, String> = describe
+    val describe: Workflow<Any, String, Nothing> = workflow("describe") { input -> input.toString() }
+    val forDrafts: Workflow<Draft, String, OrderError> = describe
 
     assertEquals("Draft(quantity=1, coupon=null)", forDrafts(Draft(1)).getOrNull()?.state)
+  }
+
+  @Test
+  fun `mapError adapts a step written for another error type`() = runTest {
+    data class PaymentError(val reason: String)
+    val charge = workflow<Draft, Draft, PaymentError>("charge") { draft ->
+      emit(DraftValidated(draft.quantity))
+      raise(PaymentError("declined"))
+    }
+
+    val adapted: Workflow<Draft, Draft, OrderError> = charge.mapError { OrderError.EmptyOrder }
+
+    assertEquals("charge", adapted.id)
+    assertEquals(Either.Left(Failure.Raised(OrderError.EmptyOrder)), adapted(Draft(1)))
   }
 }

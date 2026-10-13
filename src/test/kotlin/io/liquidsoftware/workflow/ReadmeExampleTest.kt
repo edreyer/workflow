@@ -23,14 +23,15 @@ class ReadmeExampleTest {
   data class UserDto(val id: UUID, val email: String)
   data class UserRegistered(val userId: UUID) : BaseEvent()
 
-  sealed interface RegistrationError : WorkflowError {
+  sealed interface RegistrationError {
+    data object EmailRequired : RegistrationError
     data object EmailTaken : RegistrationError
   }
 
   data class ApiError(val status: Int, val code: String)
 
   fun createUser(users: UserRepository) =
-    workflow<RegistrationDraft, RegisteredUser>("create-user") { draft ->
+    workflow<RegistrationDraft, RegisteredUser, RegistrationError>("create-user") { draft ->
       ensure(!users.exists(draft.email)) { RegistrationError.EmailTaken }
       val user = users.create(draft.email, draft.password)
       emit(UserRegistered(user.id))
@@ -40,16 +41,18 @@ class ReadmeExampleTest {
   fun registerUser(users: UserRepository): UseCase<RegisterUser, ApiError, UserDto> =
     useCase(
       name = "RegisterUser",
-      errors = { error ->
-        when (error) {
-          RegistrationError.EmailTaken -> ApiError(409, "email-taken")
-          is WorkflowError.ValidationError -> ApiError(400, "invalid")
-          else -> ApiError(500, "internal")
+      errors = { failure: Failure<RegistrationError> ->
+        when (failure) {
+          is Failure.Raised -> when (failure.error) {
+            RegistrationError.EmailRequired -> ApiError(400, "invalid")
+            RegistrationError.EmailTaken -> ApiError(409, "email-taken")
+          }
+          is Failure.Unexpected -> ApiError(500, "internal")
         }
       },
     ) {
       startWith { command ->
-        ensure(command.email.isNotBlank()) { WorkflowError.ValidationError("Email is required") }
+        ensure(command.email.isNotBlank()) { RegistrationError.EmailRequired }
         RegistrationDraft(command.email, command.password)
       }
         .then(createUser(users))
@@ -87,8 +90,8 @@ class ReadmeExampleTest {
 
   @Test
   fun `domain functions receive context values as context parameters`() = runTest {
-    val price = useCase(name = "Price") {
-      startWith { order: Order -> order }
+    val price = useCase<Order, Nothing, Int>(name = "Price") {
+      startWith { order -> order }
         .then("price") { order -> context(Tenant(context[tenantKey] ?: "default")) { priceFor(order) } }
         .result { it }
     }

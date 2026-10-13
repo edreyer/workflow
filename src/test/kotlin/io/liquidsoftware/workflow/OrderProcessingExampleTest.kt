@@ -42,7 +42,7 @@ class OrderProcessingExampleTest {
   data class ConfirmationSent(val orderId: UUID) : BaseEvent()
 
   // Errors
-  sealed interface OrderError : WorkflowError {
+  sealed interface OrderError {
     data object EmptyOrder : OrderError
     data class PaymentDeclined(val reason: String) : OrderError
   }
@@ -50,17 +50,17 @@ class OrderProcessingExampleTest {
   data class ApiError(val status: Int, val code: String)
 
   // Steps
-  private val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+  private val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-order") { draft ->
     ensure(draft.items.isNotEmpty()) { OrderError.EmptyOrder }
     emit(OrderValidated(draft.orderId))
     ValidatedOrder(draft.orderId, draft.items, draft.paymentToken)
   }
 
-  private val calculateSubtotal = workflow<ValidatedOrder, Subtotal>("calculate-subtotal") { order ->
+  private val calculateSubtotal = workflow<ValidatedOrder, Subtotal, Nothing>("calculate-subtotal") { order ->
     Subtotal(order.items.sumOf { it.quantity * it.price })
   }
 
-  private val calculateTax = workflow<ValidatedOrder, Tax>("calculate-tax") { order ->
+  private val calculateTax = workflow<ValidatedOrder, Tax, Nothing>("calculate-tax") { order ->
     Tax(order.items.sumOf { it.quantity * it.price } * 0.08)
   }
 
@@ -84,33 +84,34 @@ class OrderProcessingExampleTest {
   private val inventory = InventoryService()
   private val payments = PaymentService()
 
-  private val checkInventory = workflow<PricedOrder, PricedOrder>("check-inventory") { order ->
+  private val checkInventory = workflow<PricedOrder, PricedOrder, Nothing>("check-inventory") { order ->
     order.copy(inventoryAvailable = inventory.isAvailable(order))
   }
 
-  private val capturePayment = workflow<PricedOrder, Unit>("capture-payment") { order ->
+  private val capturePayment = workflow<PricedOrder, Unit, OrderError>("capture-payment") { order ->
     emit(PaymentCaptured(order.order.orderId, payments.capture(order)))
   }
 
-  private val notifyWarehouse = workflow<PricedOrder, Unit>("notify-warehouse") { order ->
+  private val notifyWarehouse = workflow<PricedOrder, Unit, Nothing>("notify-warehouse") { order ->
     delay(50) // warehouse service call
   }
 
-  private val prepareShipment = workflow<PricedOrder, PricedOrder>("prepare-shipment") { order ->
+  private val prepareShipment = workflow<PricedOrder, PricedOrder, Nothing>("prepare-shipment") { order ->
     emit(ShipmentPrepared(order.order.orderId, "TRACK-${order.order.orderId.toString().take(8)}"))
     order
   }
 
-  private val sendConfirmation = workflow<PricedOrder, Unit>("send-confirmation") { order ->
+  private val sendConfirmation = workflow<PricedOrder, Unit, Nothing>("send-confirmation") { order ->
     emit(ConfirmationSent(order.order.orderId))
   }
 
-  private fun toApiError(error: WorkflowError): ApiError =
-    when (error) {
-      OrderError.EmptyOrder -> ApiError(400, "empty-order")
-      is OrderError.PaymentDeclined -> ApiError(402, "payment-declined")
-      is WorkflowError.ValidationError -> ApiError(400, "invalid")
-      else -> ApiError(500, "internal")
+  private fun toApiError(failure: Failure<OrderError>): ApiError =
+    when (failure) {
+      is Failure.Raised -> when (failure.error) {
+        OrderError.EmptyOrder -> ApiError(400, "empty-order")
+        is OrderError.PaymentDeclined -> ApiError(402, "payment-declined")
+      }
+      is Failure.Unexpected -> ApiError(500, "internal")
     }
 
   // Use case
@@ -130,7 +131,7 @@ class OrderProcessingExampleTest {
         }
         .logging {
           success { (order) -> field("itemCount", order.order.items.size) }
-          failure { error -> field("status", error.status) }
+          failure { failure -> field("unexpected", failure is Failure.Unexpected) }
         }
     }
 

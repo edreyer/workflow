@@ -18,24 +18,27 @@ class UseCaseLoggingTest {
   data class Patient(val patientName: String)
   data class PatientRegistered(val patientName: String) : BaseEvent()
   data class PatientError(val reason: String, val retryable: Boolean)
+  data class StorageDown(val detail: String)
 
-  private val register = workflow<Patient, Patient>("register-patient") { patient ->
+  private val register = workflow<Patient, Patient, Nothing>("register-patient") { patient ->
     emit(PatientRegistered(patient.patientName))
     patient
   }
 
-  private val failing = workflow<Patient, Patient>("failing") {
-    raise(WorkflowError.ExecutionError("patient payload must not appear"))
+  private val failing = workflow<Patient, Patient, StorageDown>("failing") {
+    raise(StorageDown("patient payload must not appear"))
   }
 
   private fun registerPatient(
-    vararg steps: Workflow<Patient, Patient>,
+    vararg steps: Workflow<Patient, Patient, StorageDown>,
     config: UseCaseConfig = UseCaseConfig.Default,
-    logging: UseCaseLoggingBuilder<PatientError, Patient>.() -> Unit = {},
+    logging: UseCaseLoggingBuilder<Failure<StorageDown>, Patient>.() -> Unit = {},
   ): UseCase<RegisterPatient, PatientError, Int> =
     useCase(
       name = "RegisterPatient",
-      errors = { PatientError(it.code, retryable = false) },
+      errors = { failure: Failure<StorageDown> ->
+        PatientError(if (failure is Failure.Raised) "storage-down" else "unexpected", retryable = false)
+      },
       config = config,
     ) {
       steps.fold(startWith { command -> Patient(command.patientName) }) { pipeline, step -> pipeline.then(step) }
@@ -107,19 +110,19 @@ class UseCaseLoggingTest {
   }
 
   @Test
-  fun `failure fields are typed to the mapped error`() = runTest {
+  fun `failure fields are typed to the failure`() = runTest {
     withUseCaseLogs { events ->
       val useCase = registerPatient(failing) {
-        failure { error ->
-          field("reason", error.reason)
-          field("retryable", error.retryable)
+        failure { failure ->
+          field("reason", if (failure is Failure.Raised) failure.error::class.simpleName else "unexpected")
+          field("unexpected", failure is Failure.Unexpected)
         }
       }
 
       val result = useCase(RegisterPatient("Bob"))
 
-      assertEquals(Either.Left(PatientError("ExecutionError", false)), result)
-      assertTrue(events.last().formattedMessage.endsWith("reason=ExecutionError retryable=false"))
+      assertEquals(Either.Left(PatientError("storage-down", false)), result)
+      assertTrue(events.last().formattedMessage.endsWith("reason=StorageDown unexpected=false"))
     }
   }
 

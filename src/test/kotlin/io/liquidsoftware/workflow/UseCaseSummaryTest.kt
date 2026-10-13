@@ -16,13 +16,19 @@ class UseCaseSummaryTest {
 
   private val config = useCaseConfig { onSummary { summaries += it } }
 
-  private val step = workflow<Input, Input>("step") { emit(Done(it.value)); it }
-  private val rejectNegative = workflow<Input, Input>("reject-negative") { input ->
-    if (input.value < 0) raise(WorkflowError.DomainError("negative", "value ${input.value} is negative"))
+  sealed interface TestError {
+    data class Negative(val value: Int) : TestError
+    data class Down(val reason: String) : TestError
+    data object Shared : TestError
+  }
+
+  private val step = workflow<Input, Input, Nothing>("step") { emit(Done(it.value)); it }
+  private val rejectNegative = workflow<Input, Input, TestError>("reject-negative") { input ->
+    if (input.value < 0) raise(TestError.Negative(input.value))
     input
   }
 
-  private val useCase: UseCase<Input, WorkflowError, Int> = useCase(name = "Summarized", config = config) {
+  private val useCase: UseCase<Input, Failure<TestError>, Int> = useCase(name = "Summarized", config = config) {
     startWith { it }
       .then(step)
       .then(rejectNegative)
@@ -48,16 +54,16 @@ class UseCaseSummaryTest {
 
     val summary = summaries.single()
     assertEquals(false, summary.succeeded)
-    assertEquals(RootErrorInfo("DomainError", "negative", null, "reject-negative"), summary.rootError)
+    assertEquals(RootErrorInfo("Negative", false, null, "reject-negative"), summary.rootError)
     assertEquals("corr-2", summary.correlationId)
     assertTrue("-5" !in summary.toString())
-    assertEquals("value -5 is negative", summary.withErrorMessages().rootError?.message)
+    assertEquals("Negative(value=-5)", summary.withErrorMessages().rootError?.message)
   }
 
   @Test
   fun `failure summary keeps the run's events and launched failures and ignores launched steps when naming the failure`() = runTest {
-    val failingSideEffect = workflow<Input, Unit>("audit") { raise(WorkflowError.ExecutionError("audit down")) }
-    val failing: UseCase<Input, WorkflowError, Int> = useCase(name = "Failing", config = config) {
+    val failingSideEffect = workflow<Input, Unit, TestError>("audit") { raise(TestError.Down("audit")) }
+    val failing: UseCase<Input, Failure<TestError>, Int> = useCase(name = "Failing", config = config) {
       startWith { it }
         .then(step)
         .thenLaunch(failingSideEffect)
@@ -76,12 +82,12 @@ class UseCaseSummaryTest {
 
   @Test
   fun `failure summary names the parallel branch whose error was returned`() = runTest {
-    val slowFailure = workflow<Input, Int>("slow-failure") {
+    val slowFailure = workflow<Input, Int, TestError>("slow-failure") {
       delay(50)
-      raise(WorkflowError.DomainError("slow", "slow failed"))
+      raise(TestError.Down("slow"))
     }
-    val fastFailure = workflow<Input, Int>("fast-failure") { raise(WorkflowError.DomainError("fast", "fast failed")) }
-    val parallelFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "ParallelFailures", config = config) {
+    val fastFailure = workflow<Input, Int, TestError>("fast-failure") { raise(TestError.Down("fast")) }
+    val parallelFailures: UseCase<Input, Failure<TestError>, Int> = useCase(name = "ParallelFailures", config = config) {
       startWith { it }
         .parallelJoin(slowFailure, fastFailure) { a, b -> a + b }
         .result { it }
@@ -89,19 +95,17 @@ class UseCaseSummaryTest {
 
     parallelFailures(Input(1))
 
-    assertEquals(RootErrorInfo("DomainError", "slow", null, "slow-failure"), summaries.single().rootError)
+    assertEquals(RootErrorInfo("Down", false, null, "slow-failure"), summaries.single().rootError)
   }
-
-  data object Shared : WorkflowError
 
   @Test
   fun `failure summary names the selected branch when branches raise the same error instance`() = runTest {
-    val slow = workflow<Input, Int>("slow-shared") {
+    val slow = workflow<Input, Int, TestError>("slow-shared") {
       delay(50)
-      raise(Shared)
+      raise(TestError.Shared)
     }
-    val fast = workflow<Input, Int>("fast-shared") { raise(Shared) }
-    val sharedFailures: UseCase<Input, WorkflowError, Int> = useCase(name = "SharedFailures", config = config) {
+    val fast = workflow<Input, Int, TestError>("fast-shared") { raise(TestError.Shared) }
+    val sharedFailures: UseCase<Input, Failure<TestError>, Int> = useCase(name = "SharedFailures", config = config) {
       startWith { it }
         .parallelJoin(slow, fast) { a, b -> a + b }
         .result { it }
@@ -114,12 +118,12 @@ class UseCaseSummaryTest {
 
   @Test
   fun `failure summary keeps events from parallel branches that succeeded`() = runTest {
-    val emitting = workflow<Input, Unit>("emitting") { emit(Done(it.value)) }
-    val failing = workflow<Input, Unit>("failing") {
+    val emitting = workflow<Input, Unit, TestError>("emitting") { emit(Done(it.value)) }
+    val failing = workflow<Input, Unit, TestError>("failing") {
       delay(10)
-      raise(WorkflowError.ExecutionError("down"))
+      raise(TestError.Down("down"))
     }
-    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "Partial", config = config) {
+    val partial: UseCase<Input, Failure<TestError>, Int> = useCase(name = "Partial", config = config) {
       startWith { it }
         .parallel(emitting, failing)
         .result { it.value }
@@ -133,12 +137,12 @@ class UseCaseSummaryTest {
 
   @Test
   fun `failure summary keeps events from parallelJoin branches that succeeded`() = runTest {
-    val emitting = workflow<Input, Int>("emitting-join") { emit(Done(it.value)); 1 }
-    val failing = workflow<Input, Int>("failing-join") {
+    val emitting = workflow<Input, Int, TestError>("emitting-join") { emit(Done(it.value)); 1 }
+    val failing = workflow<Input, Int, TestError>("failing-join") {
       delay(10)
-      raise(WorkflowError.ExecutionError("down"))
+      raise(TestError.Down("down"))
     }
-    val partial: UseCase<Input, WorkflowError, Int> = useCase(name = "PartialJoin", config = config) {
+    val partial: UseCase<Input, Failure<TestError>, Int> = useCase(name = "PartialJoin", config = config) {
       startWith { it }
         .parallelJoin(emitting, failing) { a, b -> a + b }
         .result { it }
@@ -151,7 +155,7 @@ class UseCaseSummaryTest {
 
   @Test
   fun `listeners still get a summary when the error mapper throws`() = runTest {
-    val throwingMapper: UseCase<Input, String, Int> = useCase(name = "ThrowingMapper", errors = { error("bad mapper") }, config = config) {
+    val throwingMapper: UseCase<Input, String, Int> = useCase(name = "ThrowingMapper", errors = { _: Failure<TestError> -> error("bad mapper") }, config = config) {
       startWith { it }.then(step).then(rejectNegative).result { it.value }
     }
 
@@ -162,8 +166,8 @@ class UseCaseSummaryTest {
 
   @Test
   fun `failure outside any step names no step`() = runTest {
-    val rejecting: UseCase<Input, WorkflowError, Int> = useCase(name = "Rejecting", config = config) {
-      startWith<Input> { raise(WorkflowError.ValidationError("bad")) }
+    val rejecting: UseCase<Input, Failure<TestError>, Int> = useCase(name = "Rejecting", config = config) {
+      startWith<Input> { raise(TestError.Down("bad")) }
         .then(step)
         .result { it.value }
     }
@@ -175,7 +179,7 @@ class UseCaseSummaryTest {
 
   @Test
   fun `use cases without a config notify no listeners`() = runTest {
-    val unconfigured: UseCase<Input, WorkflowError, Int> = useCase(name = "Unconfigured") { startWith { it }.result { it.value } }
+    val unconfigured: UseCase<Input, Failure<TestError>, Int> = useCase(name = "Unconfigured") { startWith { it }.result { it.value } }
 
     unconfigured(Input(1))
 
@@ -184,8 +188,8 @@ class UseCaseSummaryTest {
 
   @Test
   fun `a throwing listener does not affect the use case`() = runTest {
-    val withThrowingListener = useCase(name = "Summarized", config = useCaseConfig(config) { onSummary { error("listener down") } }) {
-      startWith { input: Input -> input }.result { it.value }
+    val withThrowingListener = useCase<Input, Nothing, Int>(name = "Summarized", config = useCaseConfig(config) { onSummary { error("listener down") } }) {
+      startWith { input -> input }.result { it.value }
     }
 
     assertEquals(3, withThrowingListener(Input(3)).getOrNull())

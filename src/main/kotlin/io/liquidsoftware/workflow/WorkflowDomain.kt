@@ -122,58 +122,29 @@ public data class WorkflowExecution(
 )
 
 /**
- * A failure raised by a workflow step, `startWith`, or a result projection.
- *
- * The library's own errors are nested here. Applications can also implement this interface with
- * their own sealed error types and raise them directly from steps; they reach the `errors` mapper
- * of `useCase` unchanged.
+ * Why a use case or step failed: an application error that was raised, or an exception nobody
+ * expected. The `errors` mapper of `useCase` receives one, so its `when` can be exhaustive:
  *
  * ```kotlin
- * sealed interface OrderError : WorkflowError {
- *   data object OutOfStock : OrderError
- *   data class PaymentDeclined(val reason: String) : OrderError
+ * fun toApiError(failure: Failure<OrderError>): ApiError = when (failure) {
+ *   is Failure.Raised -> when (val error = failure.error) {
+ *     OrderError.EmptyOrder -> ApiError.BadRequest("Order has no items")
+ *     is OrderError.PaymentDeclined -> ApiError.PaymentRequired(error.reason)
+ *   }
+ *   is Failure.Unexpected -> ApiError.Internal
  * }
  * ```
  */
-public interface WorkflowError {
-  /**
-   * Stable, non-sensitive identifier used in logs and summaries. Defaults to the class name.
-   */
-  public val code: String
-    get() = this::class.simpleName ?: "WorkflowError"
+public sealed interface Failure<out E> {
+  /** A step, `startWith`, or `result` raised [error]. */
+  public data class Raised<out E>(val error: E) : Failure<E>
 
   /**
-   * Human-readable description. It may contain user data, so summaries redact it unless asked not to.
+   * A step, `startWith`, or `result` threw [cause], or the use case was assembled in a way that
+   * cannot run, such as a missing expected event.
    */
-  public val message: String
-    get() = code
-
-  /** Input that failed validation. */
-  public data class ValidationError(override val message: String) : WorkflowError
-
-  /** A step could not complete. */
-  public data class ExecutionError(override val message: String) : WorkflowError
-
-  /** A business rule failed. Prefer your own [WorkflowError] types when you need structure. */
-  public data class DomainError(
-    override val code: String,
-    override val message: String,
-    val metadata: Map<String, String> = emptyMap(),
-  ) : WorkflowError
-
-  /** A step, `startWith`, or projection threw. */
-  public data class ExceptionError(override val message: String, val ex: Throwable) : WorkflowError
-
-  /** The use case was assembled in a way that cannot run, such as a missing expected event. */
-  public data class CompositionError(override val message: String) : WorkflowError
+  public data class Unexpected(val cause: Throwable) : Failure<Nothing>
 }
-
-/**
- * Kept so 0.8.x error mappers still compile. Step errors are no longer wrapped, so this returns
- * the error unchanged.
- */
-@Deprecated("Step errors are no longer wrapped. Use the error directly.", ReplaceWith("this"))
-public fun WorkflowError.rootCause(): WorkflowError = this
 
 /**
  * Former marker for workflow state. Any type can now be workflow state.

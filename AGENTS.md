@@ -117,11 +117,12 @@ Tests use `kotlin("test")` on JUnit 5 with `kotlinx-coroutines-test`
 
 ### Architecture
 
-- `Workflow.kt`: `Workflow<I, O>`, a final class the library builds from an id
-  and a step lambda. Users never implement it: steps are functions, wired in with
-  `workflow(id) { }`, `guard(id) { }`, or inline `Pipeline.then(id) { }`. The
-  lambda's scope, `WorkflowStepScope`, is an Arrow `Raise<WorkflowError>` with
-  `emit`, `put`, and `context`. Also defines `@WorkflowDsl`, step execution
+- `Workflow.kt`: `Workflow<I, O, E>`, a final class the library builds from an
+  id and a step lambda. Users never implement it: steps are functions, wired in
+  with `workflow(id) { }`, `guard(id) { }`, or inline `Pipeline.then(id) { }`,
+  and `mapError` adapts a step's error type. The lambda's scope,
+  `WorkflowStepScope<E>`, is an Arrow `Raise<E>` with `emit` and a read-only
+  `context`. Also defines `@WorkflowDsl`, step execution
   (`runStep`), and the `ExecutionRecorder` that collects executions and
   attributes failures to steps.
 - `UseCase.kt`: `useCase { startWith { } ... .result { } }`. `Pipeline<I, E, S>`
@@ -132,18 +133,21 @@ Tests use `kotlin("test")` on JUnit 5 with `kotlinx-coroutines-test`
 - `ParallelJoin.kt`: top-level `parallelJoin` for 2 to 8 branches,
   `ParallelErrorPolicy` (`WaitAll`, `FailFast`), and `runBranches`.
 - `WorkflowDomain.kt`: `Event`, identity-based `Key<T>`, the immutable
-  `WorkflowContext`, `WorkflowResult`, `WorkflowExecution`, and the open
-  `WorkflowError` interface with the library's built-in errors.
+  `WorkflowContext`, `WorkflowResult`, `WorkflowExecution`, and the sealed
+  `Failure<E>` (`Raised`, `Unexpected`).
 - `UseCaseLogging.kt` and `UseCaseTelemetry.kt`: debug start and finish logs
   that carry only safe metadata unless fields are added explicitly,
   `UseCaseConfig` built with `useCaseConfig { }` and passed to `useCase`, and `UseCaseSummary` for `onSummary`
   listeners. Error messages are redacted unless `withErrorMessages()` is
   called.
 
-Errors are never wrapped. Steps raise `WorkflowError`s, including
-application-defined sealed types, and the `errors` mapper receives them as they
-were raised. Parallel branches and launched work merge back only the context
-keys they changed.
+Error types belong to the application and need no library supertype. A
+pipeline has one error type `E`; its steps raise `E`, a subtype, or `Nothing`.
+Internally everything runs under `Raise<Failure<Any?>>`: raised errors are
+wrapped once in `Failure.Raised`, and exceptions become `Failure.Unexpected`.
+The `errors` mapper receives the `Failure<E>`, so it can be exhaustive. The
+context is read-only; parallel branches and launched work merge back only their
+events.
 
 `OrderProcessingExampleTest.kt` and `ReadmeExampleTest.kt` keep the documented
 examples compiling and passing. Update them when the public DSL changes.

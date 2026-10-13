@@ -11,6 +11,8 @@ Breaking. See [Migrating to v0.10.0](docs/migrations/0.10.0.md).
 - Removed `WorkflowStepScope.put`. The context is now read-only request metadata (correlation ID, tenant, flags) supplied by the caller. Data a step produces goes in its returned state. Parallel branches and launched work no longer merge context back.
 - `useCase` requires a `name`. It used to default to `"UseCase"`, which made logs and summaries from different use cases indistinguishable.
 - Replaced the global `useCaseLoggingGlobalConfig { }` with a `UseCaseConfig` value. Build it with `useCaseConfig { }` and pass it as `useCase(name, config = ...)`. `useCaseConfig(base) { }` adjusts an application-wide config for one use case. `clearSummaryListeners()` is removed.
+- Errors are your own types. `WorkflowError` and its built-in errors are removed. Steps are `Workflow<I, O, E>` and raise `E`, a pipeline accepts steps whose error type is its own, a subtype, or `Nothing`, and `mapError` adapts a step written for another error type. The `errors` mapper receives a sealed `Failure<E>` (`Raised(error)` or `Unexpected(cause)`), so it can be exhaustive. Without a mapper, a use case returns `Failure<E>`. Thrown exceptions, a missing `requireEvent`, and a `startWith` that returns an `Either` become `Failure.Unexpected`.
+- `.logging { failure { } }` receives the `Failure<E>` instead of the mapped error. `RootErrorInfo` replaces `code` with `unexpected`. `LaunchedFailureEvent.message` is the raised error's class name, so it carries no user data.
 
 ## 0.9.1 - 2026-10-13
 

@@ -23,7 +23,8 @@ class UseCaseTest {
   data class OrderPriced(val total: Int) : BaseEvent()
   data class ReceiptSent(val orderId: String) : BaseEvent()
 
-  sealed interface OrderError : WorkflowError {
+  sealed interface OrderError {
+    data object InvalidOrderId : OrderError
     data object EmptyOrder : OrderError
     data class PriceTooHigh(val total: Int) : OrderError
   }
@@ -33,27 +34,29 @@ class UseCaseTest {
   private val tenant = Key<String>("tenant")
   private val audit = Key<List<String>>("audit")
 
-  private val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
+  private val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-order") { draft ->
     ensure(draft.quantity > 0) { OrderError.EmptyOrder }
     emit(OrderValidated(draft.orderId))
     ValidatedOrder(draft.orderId, draft.quantity, draft.priority)
   }
 
-  private val priceOrder = workflow<ValidatedOrder, PricedOrder>("price-order") { order ->
+  private val priceOrder = workflow<ValidatedOrder, PricedOrder, OrderError>("price-order") { order ->
     val total = order.quantity * 100
     ensure(total <= 1_000) { OrderError.PriceTooHigh(total) }
     emit(OrderPriced(total))
     PricedOrder(order.orderId, total)
   }
 
-  private val expedite = workflow<PricedOrder, PricedOrder>("expedite") { it.copy(total = it.total + 50, expedited = true) }
+  private val expedite = workflow<PricedOrder, PricedOrder, Nothing>("expedite") { it.copy(total = it.total + 50, expedited = true) }
 
-  private fun toAppError(error: WorkflowError): AppError =
-    when (error) {
-      is OrderError.EmptyOrder -> AppError("empty")
-      is OrderError.PriceTooHigh -> AppError("too-high:${error.total}")
-      is WorkflowError.ValidationError -> AppError("invalid")
-      else -> AppError("unexpected:${error.code}")
+  private fun toAppError(failure: Failure<OrderError>): AppError =
+    when (failure) {
+      is Failure.Raised -> when (val error = failure.error) {
+        OrderError.InvalidOrderId -> AppError("invalid")
+        OrderError.EmptyOrder -> AppError("empty")
+        is OrderError.PriceTooHigh -> AppError("too-high:${error.total}")
+      }
+      is Failure.Unexpected -> AppError("unexpected")
     }
 
   private val placeOrder: UseCase<PlaceOrder, AppError, OrderDto> =
@@ -84,15 +87,15 @@ class UseCaseTest {
   @Test
   fun `a failing step stops the pipeline`() = runTest {
     var ran = false
-    val after = workflow<ValidatedOrder, ValidatedOrder>("after") { ran = true; it }
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
+    val after = workflow<ValidatedOrder, ValidatedOrder, Nothing>("after") { ran = true; it }
+    val useCase: UseCase<PlaceOrder, Failure<OrderError>, String> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .then(after)
         .result { it.orderId }
     }
 
-    assertEquals(Either.Left(OrderError.EmptyOrder), useCase(PlaceOrder("o-1", 0)))
+    assertEquals(Either.Left(Failure.Raised(OrderError.EmptyOrder)), useCase(PlaceOrder("o-1", 0)))
     assertEquals(false, ran)
   }
 
@@ -100,7 +103,7 @@ class UseCaseTest {
   fun `startWith can raise validation errors`() = runTest {
     val useCase: UseCase<PlaceOrder, AppError, String> = useCase("Test", errors = ::toAppError) {
       startWith { command ->
-        ensure(command.orderId.isNotBlank()) { WorkflowError.ValidationError("orderId is required") }
+        ensure(command.orderId.isNotBlank()) { OrderError.InvalidOrderId }
         command.orderId
       }.result { it }
     }
@@ -110,21 +113,21 @@ class UseCaseTest {
   }
 
   @Test
-  fun `exceptions in startWith and result become ExceptionError`() = runTest {
-    val badStart: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
+  fun `exceptions in startWith and result become Failure Unexpected`() = runTest {
+    val badStart: UseCase<PlaceOrder, Failure<Nothing>, String> = useCase("Test") {
       startWith<String> { error("start failed") }.result { it }
     }
-    val badResult: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
+    val badResult: UseCase<PlaceOrder, Failure<Nothing>, String> = useCase("Test") {
       startWith { command -> command.orderId }.result { error("projection failed") }
     }
 
-    assertEquals("start failed", assertIs<WorkflowError.ExceptionError>(badStart(PlaceOrder("o", 1)).leftOrNull()).ex.message)
-    assertEquals("projection failed", assertIs<WorkflowError.ExceptionError>(badResult(PlaceOrder("o", 1)).leftOrNull()).ex.message)
+    assertEquals("start failed", assertIs<Failure.Unexpected>(badStart(PlaceOrder("o", 1)).leftOrNull()).cause.message)
+    assertEquals("projection failed", assertIs<Failure.Unexpected>(badResult(PlaceOrder("o", 1)).leftOrNull()).cause.message)
   }
 
   @Test
   fun `result can project from the last emitted event`() = runTest {
-    val useCase: UseCase<PlaceOrder, WorkflowError, Int> = useCase("Test") {
+    val useCase: UseCase<PlaceOrder, Failure<OrderError>, Int> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .then(priceOrder)
@@ -135,18 +138,18 @@ class UseCaseTest {
   }
 
   @Test
-  fun `requireEvent raises CompositionError when the event is missing`() = runTest {
-    val useCase: UseCase<PlaceOrder, WorkflowError, Int> = useCase("Test") {
+  fun `a missing requireEvent fails as Failure Unexpected`() = runTest {
+    val useCase: UseCase<PlaceOrder, Failure<OrderError>, Int> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .result { requireEvent<OrderPriced>().total }
     }
 
-    assertIs<WorkflowError.CompositionError>(useCase(PlaceOrder("o-1", 3)).leftOrNull())
+    assertIs<Failure.Unexpected>(useCase(PlaceOrder("o-1", 3)).leftOrNull())
   }
 
   @Test
   fun `error mapper exceptions propagate to the caller`() = runTest {
-    val useCase: UseCase<PlaceOrder, AppError, String> = useCase("Test", errors = { error("bad mapper") }) {
+    val useCase: UseCase<PlaceOrder, AppError, String> = useCase("Test", errors = { _: Failure<OrderError> -> error("bad mapper") }) {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .result { it.orderId }
@@ -156,20 +159,20 @@ class UseCaseTest {
   }
 
   @Test
-  fun `a timeout started inside a step becomes an ExceptionError`() = runTest {
-    val slow = workflow<OrderDraft, OrderDraft>("slow") { withTimeout(10.milliseconds) { awaitCancellation() } }
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
+  fun `a timeout started inside a step becomes Failure Unexpected`() = runTest {
+    val slow = workflow<OrderDraft, OrderDraft, Nothing>("slow") { withTimeout(10.milliseconds) { awaitCancellation() } }
+    val useCase: UseCase<PlaceOrder, Failure<OrderError>, String> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(slow)
         .result { it.orderId }
     }
 
-    assertIs<WorkflowError.ExceptionError>(useCase(PlaceOrder("o-1", 1)).leftOrNull())
+    assertIs<Failure.Unexpected>(useCase(PlaceOrder("o-1", 1)).leftOrNull())
   }
 
   @Test
   fun `context flows from the caller through steps into the result`() = runTest {
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
+    val useCase: UseCase<PlaceOrder, Failure<OrderError>, String> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then("tag-tenant") { draft -> "${draft.orderId}@${context[tenant]}" }
         .result { tagged -> "$tagged/${context[tenant]}" }
@@ -180,9 +183,9 @@ class UseCaseTest {
 
   @Test
   fun `parallel side effects keep the state and merge events in workflow order`() = runTest {
-    val sendReceipt = workflow<PricedOrder, Unit>("send-receipt") { emit(ReceiptSent(it.orderId)) }
-    val publish = workflow<PricedOrder, String>("publish") { emit(OrderPriced(it.total)); "ignored output" }
-    val useCase: UseCase<PlaceOrder, WorkflowError, List<String>> = useCase("Test") {
+    val sendReceipt = workflow<PricedOrder, Unit, Nothing>("send-receipt") { emit(ReceiptSent(it.orderId)) }
+    val publish = workflow<PricedOrder, String, Nothing>("publish") { emit(OrderPriced(it.total)); "ignored output" }
+    val useCase: UseCase<PlaceOrder, Failure<OrderError>, List<String>> = useCase("Test") {
       startWith { command -> PricedOrder(command.orderId, 100) }
         .parallel(sendReceipt, publish)
         .result { order -> events.map { "${it::class.simpleName}:${order.orderId}" } }
@@ -193,19 +196,19 @@ class UseCaseTest {
 
   @Test
   fun `parallel side effect failure fails the use case`() = runTest {
-    val failing = workflow<PricedOrder, Unit>("failing") { raise(WorkflowError.ExecutionError("down")) }
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
+    val failing = workflow<PricedOrder, Unit, String>("failing") { raise("down") }
+    val useCase: UseCase<PlaceOrder, Failure<String>, String> = useCase("Test") {
       startWith { command -> PricedOrder(command.orderId, 100) }
         .parallel(failing, workflow("noop") { })
         .result { it.orderId }
     }
 
-    assertEquals(Either.Left(WorkflowError.ExecutionError("down")), useCase(PlaceOrder("o-1", 1)))
+    assertEquals(Either.Left(Failure.Raised("down")), useCase(PlaceOrder("o-1", 1)))
   }
 
   @Test
   fun `result can return the full workflow result`() = runTest {
-    val detailed: UseCase<PlaceOrder, WorkflowError, WorkflowResult<PricedOrder>> = useCase("Test") {
+    val detailed: UseCase<PlaceOrder, Failure<OrderError>, WorkflowResult<PricedOrder>> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .then(priceOrder)
@@ -225,8 +228,8 @@ class UseCaseTest {
 
   @Test
   fun `inline guard and then steps run in the pipeline`() = runTest {
-    val checkOrder = useCase(name = "CheckOrder") {
-      startWith { command: PlaceOrder -> OrderDraft(command.orderId, command.quantity, command.priority) }
+    val checkOrder = useCase<PlaceOrder, OrderError, String>(name = "CheckOrder") {
+      startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .guard("authorize") { draft -> ensure(draft.quantity < 5) { OrderError.PriceTooHigh(draft.quantity) } }
         .then(validateOrder)
         .then("label") { order -> "${order.orderId}:${order.quantity}" }
@@ -234,18 +237,18 @@ class UseCaseTest {
     }
 
     assertEquals(Either.Right("o-1:2"), checkOrder(PlaceOrder("o-1", 2)))
-    assertEquals(Either.Left(OrderError.PriceTooHigh(7)), checkOrder(PlaceOrder("o-2", 7)))
+    assertEquals(Either.Left(Failure.Raised(OrderError.PriceTooHigh(7))), checkOrder(PlaceOrder("o-2", 7)))
   }
 
   @Test
   fun `startWith returning an Either fails instead of becoming the state`() = runTest {
     val draftOf = { command: PlaceOrder -> Either.Right(OrderDraft(command.orderId, command.quantity, command.priority)) }
-    val forgotBind = useCase(name = "ForgotBind") {
-      startWith { command: PlaceOrder -> draftOf(command) }
+    val forgotBind = useCase<PlaceOrder, Nothing, String>(name = "ForgotBind") {
+      startWith { command -> draftOf(command) }
         .result { it.toString() }
     }
 
-    val error = assertIs<Either.Left<WorkflowError>>(forgotBind(PlaceOrder("o-1", 1))).value
-    assertIs<WorkflowError.CompositionError>(error)
+    val failure = assertIs<Either.Left<Failure<Nothing>>>(forgotBind(PlaceOrder("o-1", 1))).value
+    assertIs<Failure.Unexpected>(failure)
   }
 }
