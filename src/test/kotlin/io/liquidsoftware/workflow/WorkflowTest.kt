@@ -22,8 +22,6 @@ class WorkflowTest {
     data object EmptyOrder : OrderError
   }
 
-  private val discount = Key<Int>("discount")
-
   /** Domain code with no dependency on this library. */
   class DraftValidator {
     context(_: Raise<OrderError>)
@@ -52,17 +50,16 @@ class WorkflowTest {
   }
 
   @Test
-  fun `lambda workflow can read and put context`() = runTest {
-    val applyCoupon = workflow<Draft, Draft>("apply-coupon") { draft ->
+  fun `lambda workflow can read context`() = runTest {
+    val applyCoupon = workflow<Draft, String>("apply-coupon") { draft ->
       val coupon = ensureNotNull(draft.coupon) { WorkflowError.ValidationError("coupon required") }
-      put(discount, coupon.length)
-      draft
+      "$coupon:${context[WorkflowContext.CORRELATION_ID]}"
     }
 
     val result = applyCoupon(Draft(1, "TEN"), WorkflowContext.of(WorkflowContext.CORRELATION_ID to "corr-1"))
 
-    val value = assertIs<Either.Right<WorkflowResult<Draft>>>(result).value
-    assertEquals(3, value.context[discount])
+    val value = assertIs<Either.Right<WorkflowResult<String>>>(result).value
+    assertEquals("TEN:corr-1", value.state)
     assertEquals("corr-1", value.context[WorkflowContext.CORRELATION_ID])
   }
 

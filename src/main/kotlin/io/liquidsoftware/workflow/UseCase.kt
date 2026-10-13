@@ -304,7 +304,6 @@ internal class PipelineRun(
 
   fun absorb(result: WorkflowResult<*>) {
     events += result.events
-    context += result.context
   }
 
   fun snapshot(state: Any?): WorkflowResult<Any?> = WorkflowResult(state, events.toList(), context)
@@ -312,8 +311,6 @@ internal class PipelineRun(
 
 internal class LaunchedJob(
   val workflowId: String,
-  /** The context the job started with; only what it changed is merged back. */
-  val context: WorkflowContext,
   val deferred: Deferred<Either<WorkflowError, WorkflowResult<Any?>>>,
 )
 
@@ -331,9 +328,7 @@ private class SequentialStep(
   private val workflow = workflow.untyped()
 
   override suspend fun Raise<WorkflowError>.execute(state: Any?, run: PipelineRun): Any? {
-    val base = run.context
-    val onFailure: ((WorkflowResult<Nothing?>) -> Unit)? =
-      if (keepPartialResults) { partial -> run.absorb(partial.changesSince(base)) } else null
+    val onFailure: ((WorkflowResult<Nothing?>) -> Unit)? = if (keepPartialResults) run::absorb else null
     val result = workflow.runStep(state, run.context, run.recorder, onFailure).bind()
     run.absorb(result)
     return result.state
@@ -385,7 +380,7 @@ private class LaunchStep(
           ?: timedOut(startTime, timeout, recorder)
       }
     }
-    run.launched += LaunchedJob(workflow.id, context, deferred)
+    run.launched += LaunchedJob(workflow.id, deferred)
     return state
   }
 
@@ -420,7 +415,7 @@ private suspend fun drainLaunched(run: PipelineRun) {
   val failures = mutableListOf<String>()
   pending.zip(outcomes).forEach { (job, outcome) ->
     when (outcome) {
-      is Either.Right -> run.absorb(outcome.value.changesSince(job.context))
+      is Either.Right -> run.absorb(outcome.value)
       is Either.Left -> {
         val message = outcome.value.message
         run.events += LaunchedFailureEvent(job.workflowId, message)

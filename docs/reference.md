@@ -9,7 +9,7 @@ This document covers the public API. Start with the [README](../Readme.md) if yo
 | `UseCase<I, E, O>` | Public callable application use case. Accepts input `I`, returns `Either<E, O>`. |
 | `Pipeline<I, E, S>` | Immutable, typed chain of steps built inside `useCase { }`. `S` is the current state type. |
 | `Workflow<I, O>` | A named step from input state `I` to output state `O`, built with `workflow(id) { }` or inline with `.then(id) { }`. |
-| `WorkflowStepScope` | Receiver of a step: raise errors, read `context`, `emit` events, `put` context data. |
+| `WorkflowStepScope` | Receiver of a step: raise errors, read `context`, `emit` events. |
 | `WorkflowResult<S>` | State, events, and context: the outcome of a step run on its own, and the receiver of `thenIf` predicates. |
 | `ResultScope<S>` | Receiver of `result { }`: final events and context, plus `requireEvent<T>()`. |
 | `Event` | Marker for a domain event emitted during execution. It requires no members; extend `BaseEvent` to get a generated `id` and `timestamp`. |
@@ -158,7 +158,7 @@ Runs side-effect workflows concurrently on the current state and keeps that stat
 .parallel(sendReceiptEmail, publishPaymentEvent, policy = ParallelErrorPolicy.FailFast)
 ```
 
-Each workflow must accept `S`; its output is ignored. Events are merged in parameter order, and context from every branch is merged. A failing branch fails the use case.
+Each workflow must accept `S`; its output is ignored. Events are merged in parameter order. A failing branch fails the use case.
 
 ### `parallelJoin`
 
@@ -201,11 +201,11 @@ startWith { command -> command.toValidatedOrder() }
 
 `timeout` is a `kotlin.time.Duration?` and defaults to no timeout.
 
-`awaitLaunched()` waits for everything launched so far and merges its events and context. Use it when later steps or the result need them. Work that is still running when the pipeline ends is awaited and merged before `result { }` runs, so `awaitLaunched()` at the very end is not required.
+`awaitLaunched()` waits for everything launched so far and merges its events. Use it when later steps or the result need them. Work that is still running when the pipeline ends is awaited and merged before `result { }` runs, so `awaitLaunched()` at the very end is not required.
 
 A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and `message`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
 
-Launched work runs inside the use case invocation. Cancelling the caller cancels it too. When launched work is merged, only the context keys it changed are applied, so keys it left alone keep any newer value a later step set. If both changed the same key, the launched value wins.
+Launched work runs inside the use case invocation. Cancelling the caller cancels it too.
 
 ## Result Projection
 
@@ -283,11 +283,10 @@ val authorize = guard<PlaceOrder>("authorize") { command ->
 
 | Member | Purpose |
 | --- | --- |
-| `context` | The context as earlier steps left it, plus anything this step has `put`. |
-| `emit(event)` | Records a domain event. |
-| `put(key, value)` | Adds typed data to the context seen by later steps. |
+| `context` | The request metadata the use case was invoked with. Read-only. |
+| `emit(event)` | Records a domain event. Safe to call from coroutines launched inside the step. |
 
-These members are safe to call from coroutines launched inside the step. Exceptions thrown by a step become `WorkflowError.ExceptionError`.
+Data a step produces for later steps belongs in the state it returns, not in the context. Exceptions thrown by a step become `WorkflowError.ExceptionError`.
 
 ### Running A Step On Its Own
 
@@ -373,7 +372,7 @@ val hasTenant = Keys.TENANT in context
 
 `key to value` builds a typed `Key.Entry`, so `WorkflowContext.of(Keys.TENANT to 42)` does not compile.
 
-Inside a step, read `context[key]` and add values with `put(key, value)`.
+Steps, `thenIf` predicates and `result { }` read `context[key]`. Steps can't change the context; the library adds `LAUNCHED_FAILURES` itself.
 
 Built-in keys:
 

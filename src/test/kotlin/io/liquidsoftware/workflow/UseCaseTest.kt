@@ -168,32 +168,14 @@ class UseCaseTest {
   }
 
   @Test
-  fun `parallel branches only merge the context keys they changed`() = runTest {
-    val flags = Key<Set<String>>("flags")
-    val addFlag = workflow<OrderDraft, Unit>("add-flag") { put(flags, context[flags].orEmpty() + "b") }
-    val untouched = workflow<OrderDraft, Unit>("untouched") { }
-    val useCase: UseCase<PlaceOrder, WorkflowError, Set<String>?> = useCase {
-      startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
-        .parallel(addFlag, untouched)
-        .result { context[flags] }
-    }
-
-    assertEquals(Either.Right(setOf("a", "b")), useCase(PlaceOrder("o-1", 1), WorkflowContext.of(flags to setOf("a"))))
-  }
-
-  @Test
   fun `context flows from the caller through steps into the result`() = runTest {
-    val recordTenant = workflow<OrderDraft, OrderDraft>("record-tenant") { draft ->
-      put(audit, listOf("tenant=${context[tenant]}"))
-      draft
-    }
-    val useCase: UseCase<PlaceOrder, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
-        .then(recordTenant)
-        .result { context[audit].orEmpty() }
+        .then("tag-tenant") { draft -> "${draft.orderId}@${context[tenant]}" }
+        .result { tagged -> "$tagged/${context[tenant]}" }
     }
 
-    assertEquals(Either.Right(listOf("tenant=acme")), useCase(PlaceOrder("o-1", 1), WorkflowContext.of(tenant to "acme")))
+    assertEquals(Either.Right("o-1@acme/acme"), useCase(PlaceOrder("o-1", 1), WorkflowContext.of(tenant to "acme")))
   }
 
   @Test

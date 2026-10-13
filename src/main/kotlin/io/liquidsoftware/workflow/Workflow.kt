@@ -98,44 +98,32 @@ public suspend operator fun <I, O> Workflow<I, O>.invoke(
 /**
  * Receiver of [Workflow.execute] and [workflow] blocks.
  *
- * Besides raising [WorkflowError]s, a step can read the [context], [emit] domain events, and [put]
- * typed data into the context seen by later steps. These methods are safe to call from coroutines
- * launched inside the step.
+ * Besides raising [WorkflowError]s, a step can read the use case's [context] and [emit] domain
+ * events. [emit] is safe to call from coroutines launched inside the step. Data for later steps
+ * belongs in the step's returned state, not in the context.
  */
 @WorkflowDsl
 public class WorkflowStepScope internal constructor(
   raise: Raise<WorkflowError>,
-  context: WorkflowContext,
+  /** Request metadata the use case was invoked with, such as a correlation ID. */
+  public val context: WorkflowContext,
   internal val recorder: ExecutionRecorder,
 ) : Raise<WorkflowError> by raise {
   private val lock = Any()
   private val events = mutableListOf<Event>()
-  private var currentContext = context
-
-  /** The context as the previous steps left it, plus anything this step has [put]. */
-  public val context: WorkflowContext
-    get() = synchronized(lock) { currentContext }
 
   /** Records a domain event emitted by this step. */
   public fun emit(event: Event) {
     synchronized(lock) { events += event }
   }
 
-  /** Adds typed data to the context seen by later steps. */
-  public fun <T : Any> put(key: Key<T>, value: T) {
-    synchronized(lock) { currentContext = currentContext.with(key, value) }
-  }
-
-  /** Merges the events and context of a nested step run into this one. */
+  /** Merges the events of a nested step run into this one. */
   internal fun absorb(result: WorkflowResult<*>) {
-    synchronized(lock) {
-      events += result.events
-      currentContext += result.context
-    }
+    synchronized(lock) { events += result.events }
   }
 
   internal fun <O> toResult(state: O): WorkflowResult<O> =
-    synchronized(lock) { WorkflowResult(state, events.toList(), currentContext) }
+    synchronized(lock) { WorkflowResult(state, events.toList(), context) }
 }
 
 /**
@@ -191,7 +179,7 @@ internal class ExecutionRecorder private constructor(
 
 /**
  * Runs this step, records its execution, and returns its result. When the step fails,
- * [onFailure] receives the events and context it collected before failing.
+ * [onFailure] receives the events it collected before failing.
  */
 internal suspend fun <I, O> Workflow<I, O>.runStep(
   input: I,

@@ -21,13 +21,10 @@ class ThenLaunchTest {
   data class Seed(val value: String)
   data class SideEffect(val label: String) : BaseEvent()
 
-  private val labelKey = Key<String>("label")
-
   private fun sideEffect(id: String, label: String = id, delayMs: Long = 0) =
     workflow<Seed, Unit>(id) {
       if (delayMs > 0) delay(delayMs)
       emit(SideEffect(label))
-      put(labelKey, label)
     }
 
   private fun failing(id: String) = workflow<Seed, Unit>(id) { raise(WorkflowError.ExecutionError("failure: $id")) }
@@ -41,12 +38,10 @@ class ThenLaunchTest {
         .thenLaunch(sideEffect("a"))
         .thenLaunch(sideEffect("b"))
         .awaitLaunched()
-        .result { labels(events).sorted() + listOfNotNull(context[labelKey]) }
+        .result { labels(events).sorted() }
     }
 
-    val value = useCase(Seed("x")).getOrNull()!!
-    assertEquals(listOf("a", "b"), value.take(2))
-    assertTrue(value.last() in setOf("a", "b"))
+    assertEquals(Either.Right(listOf("a", "b")), useCase(Seed("x")))
   }
 
   @Test
@@ -114,21 +109,6 @@ class ThenLaunchTest {
     }
 
     assertEquals(Either.Right(listOf("An exception occurred")), useCase(Seed("x")))
-  }
-
-  @Test
-  fun `merging launched work does not undo context changes made after it started`() = runTest {
-    val counter = Key<Int>("counter")
-    val bump = workflow<Seed, Seed>("bump") { put(counter, 2); it }
-    val useCase: UseCase<Seed, WorkflowError, Int?> = useCase {
-      startWith { it }
-        .thenLaunch(sideEffect("audit", delayMs = 20))
-        .then(bump)
-        .awaitLaunched()
-        .result { context[counter] }
-    }
-
-    assertEquals(Either.Right(2), useCase(Seed("x"), WorkflowContext.of(counter to 1)))
   }
 
   @Test

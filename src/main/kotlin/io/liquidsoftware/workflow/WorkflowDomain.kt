@@ -57,7 +57,8 @@ public class Key<T : Any>(public val name: String) {
 
 /**
  * Immutable, typed metadata that flows through a use case, such as a correlation ID or feature
- * flags. Steps read it through [WorkflowStepScope.context] and add to it with [WorkflowStepScope.put].
+ * flags. Pass it when invoking the use case; steps read it through [WorkflowStepScope.context]. Data
+ * that steps produce belongs in the typed state, not here.
  */
 public class WorkflowContext private constructor(
   private val data: Map<Key<*>, Any>,
@@ -78,13 +79,6 @@ public class WorkflowContext private constructor(
   public operator fun plus(other: WorkflowContext): WorkflowContext =
     if (other.data.isEmpty()) this else WorkflowContext(data + other.data)
 
-  /**
-   * The entries that differ from [base]. Merging only these keeps a stale copy of an untouched key
-   * from overwriting a newer value.
-   */
-  internal fun changesSince(base: WorkflowContext): WorkflowContext =
-    if (this === base) WorkflowContext() else WorkflowContext(data.filter { (key, value) -> base.data[key] != value })
-
   override fun equals(other: Any?): Boolean = other is WorkflowContext && other.data == data
   override fun hashCode(): Int = data.hashCode()
   override fun toString(): String = "WorkflowContext(keys=${data.keys})"
@@ -104,17 +98,13 @@ public class WorkflowContext private constructor(
 
 /**
  * The outcome of running a workflow step on its own: the new state, the events the step emitted,
- * and the context it produced.
+ * and the context it ran with.
  */
 public data class WorkflowResult<out S>(
   val state: S,
   val events: List<Event> = emptyList(),
   val context: WorkflowContext = WorkflowContext(),
 )
-
-/** This result with only the context entries that differ from [base]. */
-internal fun <S> WorkflowResult<S>.changesSince(base: WorkflowContext): WorkflowResult<S> =
-  copy(context = context.changesSince(base))
 
 /**
  * One workflow step run, recorded for logging and [UseCaseSummary].

@@ -77,4 +77,23 @@ class ReadmeExampleTest {
     val fake = UseCase<RegisterUser, ApiError, UserDto> { _, _ -> Either.Left(ApiError(503, "unavailable")) }
     assertEquals(Either.Left(ApiError(503, "unavailable")), fake(RegisterUser("person@example.com", "pw")))
   }
+
+  data class Tenant(val id: String)
+  data class Order(val total: Int)
+  private val tenantKey = Key<String>("tenant")
+
+  context(tenant: Tenant)
+  fun priceFor(order: Order): Int = if (tenant.id == "acme") order.total * 9 / 10 else order.total
+
+  @Test
+  fun `domain functions receive context values as context parameters`() = runTest {
+    val price = useCase(name = "Price") {
+      startWith { order: Order -> order }
+        .then("price") { order -> context(Tenant(context[tenantKey] ?: "default")) { priceFor(order) } }
+        .result { it }
+    }
+
+    assertEquals(Either.Right(90), price(Order(100), WorkflowContext.of(tenantKey to "acme")))
+    assertEquals(Either.Right(100), price(Order(100)))
+  }
 }

@@ -102,7 +102,7 @@ startWith { command -> OrderDraft(command.orderId, command.items) }
   }
 ```
 
-`Payments` doesn't depend on this library. A function that can fail declares `context(_: Raise<OrderError>)`, which is plain Arrow, and you can test it with `either { payments.capture(order) }`. Inside a step block you can also `emit` domain events and `put` typed context data for later steps. `.guard` checks the state and passes it on unchanged.
+`Payments` doesn't depend on this library. A function that can fail declares `context(_: Raise<OrderError>)`, which is plain Arrow, and you can test it with `either { payments.capture(order) }`. Inside a step block you can also `emit` domain events and read the request `context`. `.guard` checks the state and passes it on unchanged.
 
 To name a step once and reuse it, or to pass it to `parallel`, `parallelJoin`, `thenIf` or `thenLaunch`, define it with `workflow`:
 
@@ -128,8 +128,9 @@ val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
       .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
         PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount)
       }
-      .parallel(checkInventory, capturePayment)
-      .thenIf(prepareShipment) { context[Keys.INVENTORY_AVAILABLE] == true }
+      .then(checkInventory)
+      .parallel(capturePayment, notifyWarehouse)
+      .thenIf(prepareShipment) { order -> order.inventoryAvailable }
       .thenLaunch(sendConfirmation)
       .result { order -> OrderReceipt(order.order.orderId, order.total) }
   }
@@ -209,7 +210,18 @@ val result = processOrder(
 )
 ```
 
-Steps read `context[Keys.TENANT]` and add values with `put(key, value)`. Keep context values operational. Don't use the context to pass domain data around the typed state.
+Steps, `thenIf` predicates and `result { }` read it with `context[Keys.TENANT]`. Steps can't change it: data a step produces goes in the state it returns, where the compiler can check it.
+
+To keep domain functions free of `Key` lookups, have them declare what they need as a context parameter and supply it from the step:
+
+```kotlin
+data class Tenant(val id: String)
+
+context(tenant: Tenant)
+fun priceFor(order: Order): Int = if (tenant.id == "acme") order.total * 9 / 10 else order.total
+
+.then("price") { order -> context(Tenant(context[Keys.TENANT] ?: "default")) { priceFor(order) } }
+```
 
 ## Observability And Data Safety
 

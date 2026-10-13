@@ -139,7 +139,7 @@ private fun <I, R> parallelJoinOf(
 
 /**
  * Runs [workflows] concurrently on [input]. Each branch sees [context]. Every branch that succeeds
- * is passed to [absorb], even when another branch fails, so its events and context are not lost.
+ * is passed to [absorb], even when another branch fails, so its events are not lost.
  * The returned results keep branch order.
  */
 internal suspend fun <I> runBranches(
@@ -158,7 +158,7 @@ internal suspend fun <I> runBranches(
     ParallelErrorPolicy.WaitAll -> deferreds.awaitAll()
     ParallelErrorPolicy.FailFast -> failFast(deferreds)
   }
-  outcomes.forEach { outcome -> outcome?.onRight { absorb(it.changesSince(context)) } }
+  outcomes.forEach { outcome -> outcome?.onRight { absorb(it) } }
   // The first failure by parameter order wins.
   val failed = outcomes.indexOfFirst { it is Either.Left }
   if (failed >= 0) {

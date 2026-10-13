@@ -26,7 +26,12 @@ class OrderProcessingExampleTest {
   data class ValidatedOrder(val orderId: UUID, val items: List<OrderItem>, val paymentToken: String)
   data class Subtotal(val amount: Double)
   data class Tax(val amount: Double)
-  data class PricedOrder(val order: ValidatedOrder, val subtotal: Double, val tax: Double) {
+  data class PricedOrder(
+    val order: ValidatedOrder,
+    val subtotal: Double,
+    val tax: Double,
+    val inventoryAvailable: Boolean = false,
+  ) {
     val total: Double get() = subtotal + tax
   }
 
@@ -43,10 +48,6 @@ class OrderProcessingExampleTest {
   }
 
   data class ApiError(val status: Int, val code: String)
-
-  object Keys {
-    val INVENTORY_AVAILABLE = Key<Boolean>("inventoryAvailable")
-  }
 
   // Steps
   private val validateOrder = workflow<OrderDraft, ValidatedOrder>("validate-order") { draft ->
@@ -83,12 +84,16 @@ class OrderProcessingExampleTest {
   private val inventory = InventoryService()
   private val payments = PaymentService()
 
-  private val checkInventory = workflow<PricedOrder, Unit>("check-inventory") { order ->
-    put(Keys.INVENTORY_AVAILABLE, inventory.isAvailable(order))
+  private val checkInventory = workflow<PricedOrder, PricedOrder>("check-inventory") { order ->
+    order.copy(inventoryAvailable = inventory.isAvailable(order))
   }
 
   private val capturePayment = workflow<PricedOrder, Unit>("capture-payment") { order ->
     emit(PaymentCaptured(order.order.orderId, payments.capture(order)))
+  }
+
+  private val notifyWarehouse = workflow<PricedOrder, Unit>("notify-warehouse") { order ->
+    delay(50) // warehouse service call
   }
 
   private val prepareShipment = workflow<PricedOrder, PricedOrder>("prepare-shipment") { order ->
@@ -116,8 +121,9 @@ class OrderProcessingExampleTest {
         .parallelJoin(calculateSubtotal, calculateTax) { subtotal, tax ->
           PricedOrder(order = this, subtotal = subtotal.amount, tax = tax.amount) // `this` is the ValidatedOrder
         }
-        .parallel(checkInventory, capturePayment)
-        .thenIf(prepareShipment) { context[Keys.INVENTORY_AVAILABLE] == true }
+        .then(checkInventory)
+        .parallel(capturePayment, notifyWarehouse)
+        .thenIf(prepareShipment) { order -> order.inventoryAvailable }
         .thenLaunch(sendConfirmation)
         .result { order ->
           OrderReceipt(order.order.orderId, order.total, events.lastEvent<ShipmentPrepared>()?.trackingNumber)
