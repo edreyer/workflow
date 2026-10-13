@@ -154,7 +154,7 @@ public class Pipeline<I, E, S> internal constructor(
 
   /**
    * Runs side-effect [workflows] concurrently on the current state and keeps that state. Their
-   * outputs are ignored; their events and context are merged.
+   * outputs are ignored; their events are merged.
    */
   public fun parallel(
     vararg workflows: Workflow<S, Any?, E>,
@@ -169,7 +169,7 @@ public class Pipeline<I, E, S> internal constructor(
   public fun thenLaunch(workflow: Workflow<S, Any?, E>, timeout: Duration? = null): Pipeline<I, E, S> =
     add(LaunchStep(workflow, timeout))
 
-  /** Waits for launched side effects and merges their events and context. */
+  /** Waits for launched side effects, merges their events, and records their failures. */
   public fun awaitLaunched(): Pipeline<I, E, S> = add(AwaitLaunchedStep)
 
   /** Runs 2 workflows concurrently on the current state and merges their outputs into the next state. The current state is the receiver of [merge]. */

@@ -95,7 +95,7 @@ The flow is:
 - `thenIf` runs a workflow only when the predicate matches the current state.
 - `parallel` runs side-effect workflows concurrently and keeps the current state.
 - `parallelJoin` runs state-producing workflows concurrently and merges their outputs into a new state.
-- `thenLaunch` starts side-effect work without blocking the main chain; `awaitLaunched` merges launched events and context.
+- `thenLaunch` starts side-effect work without blocking the main chain; `awaitLaunched` merges launched events and records launched failures.
 - `result { }` projects the public output from the final state, events, and context.
 - `logging { }` adds explicit fields to the finish log without changing the use case result.
 
@@ -173,7 +173,7 @@ There are overloads for 2 through 8 workflows. The current state is the receiver
 
 `policy` is a named parameter that defaults to `ParallelErrorPolicy.WaitAll`, which waits for every branch and fails with the first error by parameter order. `ParallelErrorPolicy.FailFast` cancels the remaining branches on the first failure and fails with the first error by parameter order among the branches that finished.
 
-Branches run with the same starting context. Each branch only merges the context keys it changed, and branches that succeeded are kept (their events count in the summary) even when another branch fails.
+Branches run with the same read-only context. Their events are merged in parameter order, and branches that succeeded are kept (their events count in the summary) even when another branch fails.
 
 `parallelJoin` is also a top-level function that returns a `Workflow<I, R, E>`. Use it to name a join or reuse it:
 
@@ -296,7 +296,7 @@ val result: Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>> =
   validateOrder(OrderDraft(orderId, items), WorkflowContext())
 ```
 
-The context argument is optional. The `WorkflowResult` holds the new `state`, the `events` the step emitted, and the `context` it produced.
+The context argument is optional. The `WorkflowResult` holds the new `state`, the `events` the step emitted, and the `context` it ran with.
 
 ## Error Handling
 

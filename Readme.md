@@ -156,7 +156,7 @@ val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
 | `.parallelJoin(a, b, ...) { x, y -> state }` | Run 2 to 8 steps concurrently and merge their outputs into a new state. The current state is `this`. |
 | `.parallelJoin(..., policy = ParallelErrorPolicy.FailFast) { ... }` | Cancel the remaining branches on the first failure. The default, `WaitAll`, waits for all branches and returns the first error by parameter order. |
 | `.thenLaunch(step, timeout = 2.seconds)` | Start side-effect work without waiting for it. Its failures never fail the use case. |
-| `.awaitLaunched()` | Wait for launched work when a later step needs its events or context. Pending work is always merged before `.result`. |
+| `.awaitLaunched()` | Wait for launched work when a later step needs its events or failures. Pending work is always merged before `.result`. |
 | `.result { state -> output }` | Project public output. `events`, `context`, and `requireEvent<T>()` are in scope. Required. |
 | `.logging { success { }; failure { } }` | Add explicit fields to the debug finish log. |
 

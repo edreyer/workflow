@@ -116,7 +116,7 @@ Use `useCase` when application code needs a callable use case with public input,
 
 ## State Projection
 
-Use `useCase(errors = ...) { ... }` with `.result { state -> ... }` when the public result comes from the final workflow state and errors should be mapped to an application type.
+Use `useCase(name, errors = ...) { ... }` with `.result { state -> ... }` when the public result comes from the final workflow state and errors should be mapped to an application type.
 
 ```kotlin
 val registerUser: UseCase<RegisterUserCommand, ApplicationError, UserDto> =

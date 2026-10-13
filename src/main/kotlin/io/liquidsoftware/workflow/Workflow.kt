@@ -108,7 +108,7 @@ public fun <I, O, E, F> Workflow<I, O, E>.mapError(transform: (E) -> F): Workflo
 }
 
 /**
- * Runs this workflow on its own and returns its new state, emitted events, and context.
+ * Runs this workflow on its own and returns its new state, emitted events, and the context it ran with.
  *
  * Use cases run their steps for you; call this directly to unit-test a step.
  */
