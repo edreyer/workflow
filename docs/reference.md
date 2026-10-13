@@ -45,9 +45,9 @@ val placeOrder: UseCase<PlaceOrder, WorkflowError, OrderDto> =
   }
 ```
 
-Kotlin cannot infer the input type from the block, so either declare the expected type as above or pass type arguments: `useCase<PlaceOrder, OrderDto> { ... }`, or `useCase<PlaceOrder, ApplicationError, OrderDto>(errors = ...) { ... }`.
+Kotlin cannot infer the input type from the block, so either declare the expected type as above or pass type arguments: `useCase<PlaceOrder, OrderDto>("PlaceOrder") { ... }`, or `useCase<PlaceOrder, ApplicationError, OrderDto>("PlaceOrder", errors = ...) { ... }`.
 
-`name` is a stable operational name used in logs and summaries. It defaults to `"UseCase"`. Do not include user or request data.
+`name` is required: a stable operational name used in logs and summaries. Do not include user or request data.
 
 Call a use case with its input, and optionally a `WorkflowContext`:
 

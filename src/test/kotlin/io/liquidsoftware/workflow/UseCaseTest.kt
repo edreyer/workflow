@@ -85,7 +85,7 @@ class UseCaseTest {
   fun `a failing step stops the pipeline`() = runTest {
     var ran = false
     val after = workflow<ValidatedOrder, ValidatedOrder>("after") { ran = true; it }
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .then(after)
@@ -98,7 +98,7 @@ class UseCaseTest {
 
   @Test
   fun `startWith can raise validation errors`() = runTest {
-    val useCase: UseCase<PlaceOrder, AppError, String> = useCase(errors = ::toAppError) {
+    val useCase: UseCase<PlaceOrder, AppError, String> = useCase("Test", errors = ::toAppError) {
       startWith { command ->
         ensure(command.orderId.isNotBlank()) { WorkflowError.ValidationError("orderId is required") }
         command.orderId
@@ -111,10 +111,10 @@ class UseCaseTest {
 
   @Test
   fun `exceptions in startWith and result become ExceptionError`() = runTest {
-    val badStart: UseCase<PlaceOrder, WorkflowError, String> = useCase {
+    val badStart: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
       startWith<String> { error("start failed") }.result { it }
     }
-    val badResult: UseCase<PlaceOrder, WorkflowError, String> = useCase {
+    val badResult: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
       startWith { command -> command.orderId }.result { error("projection failed") }
     }
 
@@ -124,7 +124,7 @@ class UseCaseTest {
 
   @Test
   fun `result can project from the last emitted event`() = runTest {
-    val useCase: UseCase<PlaceOrder, WorkflowError, Int> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, Int> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .then(priceOrder)
@@ -136,7 +136,7 @@ class UseCaseTest {
 
   @Test
   fun `requireEvent raises CompositionError when the event is missing`() = runTest {
-    val useCase: UseCase<PlaceOrder, WorkflowError, Int> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, Int> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .result { requireEvent<OrderPriced>().total }
     }
@@ -146,7 +146,7 @@ class UseCaseTest {
 
   @Test
   fun `error mapper exceptions propagate to the caller`() = runTest {
-    val useCase: UseCase<PlaceOrder, AppError, String> = useCase(errors = { error("bad mapper") }) {
+    val useCase: UseCase<PlaceOrder, AppError, String> = useCase("Test", errors = { error("bad mapper") }) {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .result { it.orderId }
@@ -158,7 +158,7 @@ class UseCaseTest {
   @Test
   fun `a timeout started inside a step becomes an ExceptionError`() = runTest {
     val slow = workflow<OrderDraft, OrderDraft>("slow") { withTimeout(10.milliseconds) { awaitCancellation() } }
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(slow)
         .result { it.orderId }
@@ -169,7 +169,7 @@ class UseCaseTest {
 
   @Test
   fun `context flows from the caller through steps into the result`() = runTest {
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then("tag-tenant") { draft -> "${draft.orderId}@${context[tenant]}" }
         .result { tagged -> "$tagged/${context[tenant]}" }
@@ -182,7 +182,7 @@ class UseCaseTest {
   fun `parallel side effects keep the state and merge events in workflow order`() = runTest {
     val sendReceipt = workflow<PricedOrder, Unit>("send-receipt") { emit(ReceiptSent(it.orderId)) }
     val publish = workflow<PricedOrder, String>("publish") { emit(OrderPriced(it.total)); "ignored output" }
-    val useCase: UseCase<PlaceOrder, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, List<String>> = useCase("Test") {
       startWith { command -> PricedOrder(command.orderId, 100) }
         .parallel(sendReceipt, publish)
         .result { order -> events.map { "${it::class.simpleName}:${order.orderId}" } }
@@ -194,7 +194,7 @@ class UseCaseTest {
   @Test
   fun `parallel side effect failure fails the use case`() = runTest {
     val failing = workflow<PricedOrder, Unit>("failing") { raise(WorkflowError.ExecutionError("down")) }
-    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase {
+    val useCase: UseCase<PlaceOrder, WorkflowError, String> = useCase("Test") {
       startWith { command -> PricedOrder(command.orderId, 100) }
         .parallel(failing, workflow("noop") { })
         .result { it.orderId }
@@ -205,7 +205,7 @@ class UseCaseTest {
 
   @Test
   fun `result can return the full workflow result`() = runTest {
-    val detailed: UseCase<PlaceOrder, WorkflowError, WorkflowResult<PricedOrder>> = useCase {
+    val detailed: UseCase<PlaceOrder, WorkflowError, WorkflowResult<PricedOrder>> = useCase("Test") {
       startWith { command -> OrderDraft(command.orderId, command.quantity, command.priority) }
         .then(validateOrder)
         .then(priceOrder)

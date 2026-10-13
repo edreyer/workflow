@@ -9,6 +9,7 @@ Breaking. See [Migrating to v0.10.0](docs/migrations/0.10.0.md).
 - `WorkflowExecution.workflowName` is always the step `id`. It used to be the class name for class-based steps.
 - `Event` is a marker interface with no members, so events no longer have to carry an `id` and `timestamp`. `BaseEvent` still provides both, and its constructor accepts your own values for an injected clock or ID generator. `LaunchedFailureEvent` drops its `id` and `timestamp`.
 - Removed `WorkflowStepScope.put`. The context is now read-only request metadata (correlation ID, tenant, flags) supplied by the caller. Data a step produces goes in its returned state. Parallel branches and launched work no longer merge context back.
+- `useCase` requires a `name`. It used to default to `"UseCase"`, which made logs and summaries from different use cases indistinguishable.
 
 ## 0.9.1 - 2026-10-13
 

@@ -33,7 +33,7 @@ class ThenLaunchTest {
 
   @Test
   fun `launched work is merged at awaitLaunched`() = runTest {
-    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase("Test") {
       startWith { it }
         .thenLaunch(sideEffect("a"))
         .thenLaunch(sideEffect("b"))
@@ -46,7 +46,7 @@ class ThenLaunchTest {
 
   @Test
   fun `launched work is merged when the pipeline finishes without awaitLaunched`() = runTest {
-    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase("Test") {
       startWith { it }
         .thenLaunch(sideEffect("late", delayMs = 50))
         .result { labels(events) }
@@ -67,7 +67,7 @@ class ThenLaunchTest {
       emit(SideEffect("releaser"))
       it
     }
-    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase("Test") {
       startWith { it }
         .thenLaunch(blocked)
         .then(releaser)
@@ -80,7 +80,7 @@ class ThenLaunchTest {
 
   @Test
   fun `failures and timeouts are reported without failing the use case`() = runTest {
-    val useCase: UseCase<Seed, WorkflowError, Pair<List<Pair<String, String>>, List<String>>> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, Pair<List<Pair<String, String>>, List<String>>> = useCase("Test") {
       startWith { it }
         .thenLaunch(sideEffect("ok"))
         .thenLaunch(failing("audit"))
@@ -101,7 +101,7 @@ class ThenLaunchTest {
   @Test
   fun `a timeout inside the launched step is a launched failure, not a thenLaunch timeout`() = runTest {
     val ownTimeout = workflow<Seed, Unit>("own-timeout") { withTimeout(10.milliseconds) { awaitCancellation() } }
-    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase("Test") {
       startWith { it }
         .thenLaunch(ownTimeout, timeout = 1.seconds)
         .awaitLaunched()
@@ -117,7 +117,7 @@ class ThenLaunchTest {
     resetUseCaseLoggingGlobalConfigForTest()
     useCaseLoggingGlobalConfig { onSummary { summaries += it } }
     try {
-      val useCase: UseCase<Seed, WorkflowError, String> = useCase {
+      val useCase: UseCase<Seed, WorkflowError, String> = useCase("Test") {
         startWith { it }.thenLaunch(sideEffect("slow", delayMs = 200), timeout = 50.milliseconds).result { it.value }
       }
 
@@ -132,7 +132,7 @@ class ThenLaunchTest {
 
   @Test
   fun `each awaitLaunched only drains work launched before it`() = runTest {
-    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase("Test") {
       startWith { it }
         .thenLaunch(sideEffect("first"))
         .awaitLaunched()
@@ -157,7 +157,7 @@ class ThenLaunchTest {
         cancelled = true
       }
     }
-    val useCase: UseCase<Seed, WorkflowError, String> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, String> = useCase("Test") {
       startWith { it }.thenLaunch(hanging).result { it.value }
     }
 
@@ -172,7 +172,7 @@ class ThenLaunchTest {
 
   @Test
   fun `concurrent invocations keep their launched work separate`() = runTest {
-    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase {
+    val useCase: UseCase<Seed, WorkflowError, List<String>> = useCase("Test") {
       startWith { it }
         .thenLaunch(workflow<Seed, Unit>("echo") { seed -> yield(); emit(SideEffect(seed.value)) })
         .result { labels(events) }

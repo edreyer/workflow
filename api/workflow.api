@@ -159,8 +159,6 @@ public final class io/liquidsoftware/workflow/UseCaseDefinition {
 public final class io/liquidsoftware/workflow/UseCaseKt {
 	public static final fun useCase (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
 	public static final fun useCase (Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
-	public static synthetic fun useCase$default (Ljava/lang/String;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/liquidsoftware/workflow/UseCase;
-	public static synthetic fun useCase$default (Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/liquidsoftware/workflow/UseCase;
 }
 
 public final class io/liquidsoftware/workflow/UseCaseLogFieldCollector {

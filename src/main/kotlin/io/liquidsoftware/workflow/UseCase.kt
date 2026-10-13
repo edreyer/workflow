@@ -30,7 +30,7 @@ public fun interface UseCase<in I, out E, out O> {
  *
  * ```kotlin
  * val placeOrder: UseCase<PlaceOrder, WorkflowError, OrderDto> =
- *   useCase(name = "PlaceOrder") {
+ *   useCase("PlaceOrder") {
  *     startWith { command -> OrderDraft(command.id, command.items) }
  *       .then(validateOrder)
  *       .then(priceOrder)
@@ -41,7 +41,7 @@ public fun interface UseCase<in I, out E, out O> {
  * @param name Stable operational name used in logs and summaries. Do not include user or request data.
  */
 public fun <I, O> useCase(
-  name: String? = null,
+  name: String,
   configure: UseCaseBuilder<I, WorkflowError>.() -> UseCaseDefinition<I, WorkflowError, *, O>,
 ): UseCase<I, WorkflowError, O> = useCase(name, { it }, configure)
 
@@ -54,12 +54,12 @@ public fun <I, O> useCase(
  * @param name Stable operational name used in logs and summaries. Do not include user or request data.
  */
 public fun <I, E, O> useCase(
-  name: String? = null,
+  name: String,
   errors: (WorkflowError) -> E,
   configure: UseCaseBuilder<I, E>.() -> UseCaseDefinition<I, E, *, O>,
 ): UseCase<I, E, O> {
   val definition = UseCaseBuilder<I, E>().configure()
-  return UseCaseRunner(name ?: "UseCase", errors, definition)
+  return UseCaseRunner(name, errors, definition)
 }
 
 /**

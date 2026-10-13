@@ -71,7 +71,7 @@ class ParallelJoinTest {
 
   @Test
   fun `parallelJoin in a pipeline is type checked against the current state`() = runTest {
-    val useCase: UseCase<Order, WorkflowError, Int> = useCase {
+    val useCase: UseCase<Order, WorkflowError, Int> = useCase("Test") {
       startWith { it }
         .parallelJoin(subtotal, tax) { s, t -> s.amount + t.amount }
         .then(workflow<Int, Int>("double") { it * 2 })
