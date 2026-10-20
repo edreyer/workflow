@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Documented that a use case returns only after its `thenLaunch` work finishes, including when a later step fails, and that `timeout` bounds the wait.
+- Documented raising a typed error for a step timeout with `withTimeoutOrNull(...) ?: raise(...)`.
+- Documented that a use case is not a step, and how to compose use cases instead.
+- README now states that this is in-process orchestration, not a durable workflow engine, and has a Testing section.
+- Removed the outdated `Workflow Examples.ipynb`, which used the pre-0.10 API.
+- Added a GitHub Actions build that checks the ABI and runs the tests on JDK 17 for each pull request, and Dependabot updates.
+
 ## 0.10.0 - 2026-10-13
 
 Breaking. See [Migrating to v0.10.0](docs/migrations/0.10.0.md).

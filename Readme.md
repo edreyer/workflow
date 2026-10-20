@@ -2,6 +2,8 @@
 
 `workflow` is a Kotlin DSL for making application use cases explicit.
 
+It orchestrates a single request in process. It is not a durable workflow engine like Temporal, Conductor, or Camunda: nothing is persisted, and a use case does not survive a restart or resume after a crash.
+
 In most applications, use cases are implicit. "Place an order" is a controller calling an `OrderService`, which calls `PaymentService` and `InventoryService`, each adding its own conditionals and side effects. To learn what the operation does, you trace call chains across the codebase, and services grow coupled to each other because each one orchestrates a piece of the flow.
 
 `workflow` formalizes the use case as a concept in your code. A `UseCase<Input, Error, Output>` is a type of its own, and each one lists its steps in order, with typed state between them. Services go back to being capabilities (store data, charge a card, send an email) that steps call, and they stop calling each other. Your application's use cases become a set of named values you can find, read, and test.
@@ -125,7 +127,7 @@ val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-o
 
 The third type argument is the error type the step can raise. Use `Nothing` for a step that never raises; it fits any pipeline. `guard<T, OrderError>("id") { }` builds a reusable pass-through check the same way.
 
-Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `Failure.Unexpected`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
+Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `Failure.Unexpected`. To give a timeout a domain meaning instead, use `withTimeoutOrNull` and raise your own error: `withTimeoutOrNull(5.seconds) { payments.capture(order) } ?: raise(OrderError.PaymentTimedOut)`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
 
 ## Composing Steps
 
@@ -155,7 +157,7 @@ val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
 | `.parallel(a, b, ...)` | Run side-effect steps concurrently and keep the current state. |
 | `.parallelJoin(a, b, ...) { x, y -> state }` | Run 2 to 8 steps concurrently and merge their outputs into a new state. The current state is `this`. |
 | `.parallelJoin(..., policy = ParallelErrorPolicy.FailFast) { ... }` | Cancel the remaining branches on the first failure. The default, `WaitAll`, waits for all branches and returns the first error by parameter order. |
-| `.thenLaunch(step, timeout = 2.seconds)` | Start side-effect work without waiting for it. Its failures never fail the use case. |
+| `.thenLaunch(step, timeout = 2.seconds)` | Start side-effect work that later steps don't wait for. The use case still returns only after launched work finishes, even when a step fails, so pass `timeout` for anything that talks to the network. Its failures never fail the use case. |
 | `.awaitLaunched()` | Wait for launched work when a later step needs its events or failures. Pending work is always merged before `.result`. |
 | `.result { state -> output }` | Project public output. `events`, `context`, and `requireEvent<T>()` are in scope. Required. |
 | `.logging { success { }; failure { } }` | Add explicit fields to the debug finish log. |
@@ -287,6 +289,16 @@ Add per-use-case log fields after `.result`. They are typed to the final result 
 ```
 
 A logging block that throws, or that uses one of the reserved names `name`, `outcome`, `durationMs`, `events`, or `workflows`, is reported separately and never changes the use case result.
+
+## Testing
+
+Test steps and use cases as plain suspend functions, with `runTest` from `kotlinx-coroutines-test`:
+
+- Call a reusable step directly. `validateOrder(draft)` returns its new state, events, and context, or the `Failure`.
+- Invoke a use case with fake services and assert on the mapped result. Register an `onSummary` listener in its `UseCaseConfig` to check which steps ran.
+- Callers of a use case can stand in a lambda, because `UseCase` is a `fun interface`.
+
+[Design Guidance](docs/design-guidance.md#testing) lists the edge cases worth covering.
 
 ## Installation
 
