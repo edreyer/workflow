@@ -88,6 +88,9 @@ public class WorkflowContext private constructor(
     public val CORRELATION_ID: Key<String> = Key("correlationId")
 
     /** Messages for launched side effects that failed or timed out. */
+    @Deprecated(
+      "The context only holds what the caller passed. Read LaunchedFailureEvent from the events, or UseCaseSummary.launchedFailures.",
+    )
     public val LAUNCHED_FAILURES: Key<List<String>> = Key("launchedFailures")
 
     /** Builds a context from typed entries, written `key to value`. */
@@ -113,6 +116,7 @@ public data class WorkflowResult<out S>(
  * timestamps for display only.
  */
 public data class WorkflowExecution(
+  @Deprecated("Always equal to workflowId.", ReplaceWith("workflowId"))
   val workflowName: String,
   val workflowId: String,
   val startTime: Instant,

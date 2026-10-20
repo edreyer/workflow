@@ -102,6 +102,7 @@ public final class io/liquidsoftware/workflow/ParallelJoinKt {
 
 public final class io/liquidsoftware/workflow/Pipeline {
 	public final fun awaitLaunched ()Lio/liquidsoftware/workflow/Pipeline;
+	public final fun branch (Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function2;)Lio/liquidsoftware/workflow/Pipeline;
 	public final fun guard (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lio/liquidsoftware/workflow/Pipeline;
 	public final fun parallel ([Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/ParallelErrorPolicy;)Lio/liquidsoftware/workflow/Pipeline;
 	public static synthetic fun parallel$default (Lio/liquidsoftware/workflow/Pipeline;[Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/ParallelErrorPolicy;ILjava/lang/Object;)Lio/liquidsoftware/workflow/Pipeline;
@@ -120,7 +121,9 @@ public final class io/liquidsoftware/workflow/Pipeline {
 	public static synthetic fun parallelJoin$default (Lio/liquidsoftware/workflow/Pipeline;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/ParallelErrorPolicy;Lkotlin/jvm/functions/Function8;ILjava/lang/Object;)Lio/liquidsoftware/workflow/Pipeline;
 	public static synthetic fun parallelJoin$default (Lio/liquidsoftware/workflow/Pipeline;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/Workflow;Lio/liquidsoftware/workflow/ParallelErrorPolicy;Lkotlin/jvm/functions/Function9;ILjava/lang/Object;)Lio/liquidsoftware/workflow/Pipeline;
 	public final fun result (Lkotlin/jvm/functions/Function3;)Lio/liquidsoftware/workflow/UseCaseDefinition;
+	public final fun then (Lio/liquidsoftware/workflow/Pipeline;)Lio/liquidsoftware/workflow/Pipeline;
 	public final fun then (Lio/liquidsoftware/workflow/Workflow;)Lio/liquidsoftware/workflow/Pipeline;
+	public final fun then (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;)Lio/liquidsoftware/workflow/Pipeline;
 	public final fun then (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lio/liquidsoftware/workflow/Pipeline;
 	public final fun thenIf (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function2;)Lio/liquidsoftware/workflow/Pipeline;
 	public final fun thenLaunch-6Au4x4Y (Lio/liquidsoftware/workflow/Workflow;Lkotlin/time/Duration;)Lio/liquidsoftware/workflow/Pipeline;
@@ -186,6 +189,7 @@ public final class io/liquidsoftware/workflow/UseCaseConfig$Companion {
 
 public final class io/liquidsoftware/workflow/UseCaseConfigBuilder {
 	public final fun defaultSummaryFields (Lio/liquidsoftware/workflow/DefaultSummaryFields;)V
+	public final fun launchTimeout-LRDsOJo (J)V
 	public final fun onSummary (Lkotlin/jvm/functions/Function1;)V
 	public final fun outcomeStyle (Lio/liquidsoftware/workflow/OutcomeStyle;)V
 }
@@ -195,6 +199,7 @@ public final class io/liquidsoftware/workflow/UseCaseDefinition {
 }
 
 public final class io/liquidsoftware/workflow/UseCaseKt {
+	public static final fun pipeline ()Lio/liquidsoftware/workflow/Pipeline;
 	public static final fun useCase (Ljava/lang/String;Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
 	public static final fun useCase (Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/UseCase;
 	public static synthetic fun useCase$default (Ljava/lang/String;Lio/liquidsoftware/workflow/UseCaseConfig;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/liquidsoftware/workflow/UseCase;
@@ -298,6 +303,8 @@ public final class io/liquidsoftware/workflow/WorkflowKt {
 	public static final fun invoke (Lio/liquidsoftware/workflow/Workflow;Ljava/lang/Object;Lio/liquidsoftware/workflow/WorkflowContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun invoke$default (Lio/liquidsoftware/workflow/Workflow;Ljava/lang/Object;Lio/liquidsoftware/workflow/WorkflowContext;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static final fun mapError (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/Workflow;
+	public static final fun mapInput (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/Workflow;
+	public static final fun mapOutput (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/Workflow;
 	public static final fun workflow (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lio/liquidsoftware/workflow/Workflow;
 }
 

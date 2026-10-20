@@ -42,7 +42,7 @@ Workflows represent steps in a business flow:
 
 A workflow may call services to do the technical work. A workflow should not call other workflows directly. Compose workflows in the use case pipeline instead.
 
-A use case is not a step either. Each use case has its own logging, summary, and error mapping, so nesting one inside another would report the inner request twice and map its errors to an output type the outer pipeline then has to undo. When a flow such as "register, then onboard" belongs to one request, make it one use case whose steps cover both. When it spans requests or needs compensation (a saga), coordinate the use cases in your application layer, where each one stays a separate, observable unit.
+A use case is not a step either. Each use case has its own logging, summary, and error mapping, so nesting one inside another would report the inner request twice and map its errors to an output type the outer pipeline then has to undo. When a flow such as "register, then onboard" belongs to one request, make it one use case whose steps cover both. To share a sequence of steps between use cases, build it once with `pipeline<S, E>()` and append it with `then`. When it spans requests or needs compensation (a saga), coordinate the use cases in your application layer, where each one stays a separate, observable unit.
 
 ## Designing Workflow State
 

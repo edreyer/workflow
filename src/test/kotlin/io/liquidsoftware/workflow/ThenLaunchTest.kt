@@ -96,6 +96,20 @@ class ThenLaunchTest {
   }
 
   @Test
+  fun `the config launchTimeout applies when thenLaunch passes no timeout`() = runTest {
+    val config = useCaseConfig { launchTimeout(50.milliseconds) }
+    val useCase: UseCase<Seed, Failure<LaunchError>, List<Pair<String, String>>> = useCase("Test", config = config) {
+      startWith { it }
+        .thenLaunch(sideEffect("slow", delayMs = 200))
+        .thenLaunch(sideEffect("own", delayMs = 200), timeout = 1.seconds)
+        .result { events.filterIsInstance<LaunchedFailureEvent>().map { it.workflowId to it.message } + labels(events).map { it to "ok" } }
+    }
+
+    assertEquals(Either.Right(listOf("slow" to "thenLaunch timeout: slow", "own" to "ok")), useCase(Seed("x")))
+  }
+
+  @Suppress("DEPRECATION") // Checks that LAUNCHED_FAILURES stays populated until it is removed.
+  @Test
   fun `failures and timeouts are reported without failing the use case`() = runTest {
     val useCase: UseCase<Seed, Failure<LaunchError>, Pair<List<Pair<String, String>>, List<String>>> = useCase("Test") {
       startWith { it }

@@ -130,6 +130,16 @@ Runs a step on the current state. Its output becomes the new state. Write the st
 
 A reusable step must be a `Workflow<S, O, E>` where `S` is the current state type and `E` is the pipeline's error type, a subtype of it, or `Nothing`. A mismatch is a compile error.
 
+To run a step on part of the state and keep the rest, pass `input` to pick what it needs and a `merge` block to put its output back. The current state is the receiver of `merge`:
+
+```kotlin
+.then(reserveInventory, input = { checkout -> checkout.order }) { reservation -> copy(reservation = reservation) }
+```
+
+The step keeps its own id in execution history. Exceptions thrown by `input` or `merge` become `Failure.Unexpected` attributed to the step.
+
+Pass a reusable pipeline to `then` to append its steps (see [Reusable Pipelines](#reusable-pipelines)).
+
 ### `guard`
 
 Checks the current state and passes it on unchanged:
@@ -147,6 +157,36 @@ Runs a workflow only when a predicate matches:
 ```
 
 The predicate receives the current state as its parameter and a `WorkflowResult<S>` as its receiver, so `state`, `events`, and `context` are available. Because the step may be skipped, it must be a `Workflow<S, S, E>`. Keep predicates small and side-effect free. Exceptions thrown by the predicate become `Failure.Unexpected`.
+
+### `branch`
+
+Runs one of two workflows, chosen by a predicate. Both produce the same next state type:
+
+```kotlin
+.branch(ifTrue = expressShipping, ifFalse = standardShipping) { order -> order.expedited }
+```
+
+The predicate works like the one for `thenIf`. Whichever workflow runs is recorded under its own id. Use `thenIf` when the alternative is to do nothing.
+
+### Reusable Pipelines
+
+`pipeline<S, E>()` starts a sequence of steps that takes state `S` and raises `E`, outside any use case. Build it with the usual pipeline methods and append it with `then`:
+
+```kotlin
+val fulfilOrder: Pipeline<PaidOrder, OrderError, Shipment> =
+  pipeline<PaidOrder, OrderError>()
+    .then(reserveInventory)
+    .then(shipOrder)
+
+useCase("PlaceOrder") {
+  startWith { command -> OrderDraft(command) }
+    .then(capturePayment)
+    .then(fulfilOrder)
+    .result { shipment -> shipment.toDto() }
+}
+```
+
+Its steps run as if they were written in place: each is recorded under its own id, and its events join the use case's. Its error type may be a subtype of the use case's. Use it to share a sequence between use cases, or to give a long pipeline named sections.
 
 ### `parallel`
 
@@ -198,11 +238,13 @@ startWith { command -> command.toValidatedOrder() }
 .awaitLaunched()
 ```
 
-`timeout` is a `kotlin.time.Duration?` and defaults to no timeout.
+`timeout` is a `kotlin.time.Duration?`. It defaults to the config's `launchTimeout`, or to no timeout.
 
 `awaitLaunched()` waits for everything launched so far and merges its events. Use it when later steps or the result need them. Work that is still running when the pipeline ends is awaited and merged before `result { }` runs, so `awaitLaunched()` at the very end is not required.
 
-A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and a `message` free of user data: the raised error's class name, `An exception occurred`, or `thenLaunch timeout: <id>`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
+A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and a `message` free of user data: the raised error's class name, `An exception occurred`, or `thenLaunch timeout: <id>`) and in `UseCaseSummary.launchedFailures`. `context[WorkflowContext.LAUNCHED_FAILURES]` still holds the same messages but is deprecated and will be removed in 1.0.
+
+Without a `timeout`, the config's `launchTimeout` applies, if one is set (see [Use Case Logging DSL](#use-case-logging-dsl)).
 
 Launched work runs inside the use case invocation, so later steps don't wait for it but the use case does. `invoke` returns only after every launched step has finished, on the failure path too: when a later step fails, launched work is not cancelled, and the failed result waits for it. Without a `timeout` that wait is unbounded, so pass one for anything that talks to the network. Cancelling the caller cancels launched work too.
 
@@ -287,6 +329,12 @@ val authorize = guard<PlaceOrder, OrderError>("authorize") { command ->
 
 Data a step produces for later steps belongs in the state it returns, not in the context. Exceptions thrown by a step become `Failure.Unexpected`.
 
+Adapt a reusable step to a different input or output type with `mapInput` and `mapOutput`, the same way `mapError` adapts its error type. The adapted step keeps its id:
+
+```kotlin
+.thenLaunch(sendReceipt.mapInput { order: PaidOrder -> order.customer })
+```
+
 ### Running A Step On Its Own
 
 Call a workflow directly to unit-test it:
@@ -368,14 +416,14 @@ val hasTenant = Keys.TENANT in context
 
 `key to value` builds a typed `Key.Entry`, so `WorkflowContext.of(Keys.TENANT to 42)` does not compile.
 
-Steps, `thenIf` predicates and `result { }` read `context[key]`. Steps can't change the context; the library adds `LAUNCHED_FAILURES` itself.
+Steps, `thenIf` and `branch` predicates, and `result { }` read `context[key]`. Steps can't change the context.
 
 Built-in keys:
 
 | Key | Value |
 | --- | --- |
-| `WorkflowContext.CORRELATION_ID` | `Key<String>`. Reported in `UseCaseSummary.correlationId`. |
-| `WorkflowContext.LAUNCHED_FAILURES` | `Key<List<String>>`. Messages for launched side effects that failed or timed out. |
+| `WorkflowContext.CORRELATION_ID` | `Key<String>`. Reported in `UseCaseSummary.correlationId`, and put in the SLF4J MDC as `correlationId` while the use case runs. |
+| `WorkflowContext.LAUNCHED_FAILURES` | Deprecated. The library still adds launched failure messages here; read `UseCaseSummary.launchedFailures` or `LaunchedFailureEvent`s instead. Removed in 1.0. |
 
 Keep context values operational. Avoid storing domain payloads or sensitive data in context just to make them easy to reach.
 
@@ -397,6 +445,8 @@ Logged fields are intentionally limited to operational metadata:
 - workflow count
 
 The library does not log input, state, event payloads, output, or error messages.
+
+When the context has a `CORRELATION_ID`, the use case puts it in the SLF4J MDC under `correlationId` for the whole invocation, including its own log lines and any logging inside steps, and restores the previous MDC afterwards. Add `%X{correlationId}` to your log pattern to see it.
 
 ## Use Case Logging DSL
 
@@ -422,6 +472,7 @@ Options:
 | `outcomeStyle` | `OutcomeStyle.Plain`, `OutcomeStyle.AnsiColor` | `OutcomeStyle.Plain` |
 | `defaultSummaryFields` | `DefaultSummaryFields.Enabled`, `DefaultSummaryFields.Disabled` | `DefaultSummaryFields.Enabled` |
 | `onSummary` | `(UseCaseSummary) -> Unit` | none |
+| `launchTimeout` | A positive `Duration`, used by `thenLaunch` calls that pass no `timeout` | none |
 
 `onSummary` adds a listener that is called with a `UseCaseSummary` after every use case invocation, whatever the log level. Each call adds another listener. Listeners run on the caller's coroutine; exceptions they throw are logged and ignored.
 
@@ -456,7 +507,7 @@ Explicit fields cannot be blank or use the reserved built-in names `name`, `outc
 | `eventsCount` | Number of events emitted, including on failure (events from steps that completed before the failure, and launched failures). |
 | `executions` | `WorkflowExecution`s for every step run, including parallel and launched ones. |
 | `rootError` | `RootErrorInfo` for a failed invocation, otherwise `null`. |
-| `launchedFailures` | Messages from `WorkflowContext.LAUNCHED_FAILURES`. |
+| `launchedFailures` | One message per `LaunchedFailureEvent`: `thenLaunch failure <workflowId> (<message>)`. |
 | `correlationId` | Value of `WorkflowContext.CORRELATION_ID`, if set. |
 
 `RootErrorInfo` has the `type` (class name of the raised error, or of the exception), whether the failure was `unexpected`, the `message` (the raised error's `toString()` or the exception's message), and the `workflowId` of the failing step when the failure came from a step. Launched side effects never count as the failing step.
