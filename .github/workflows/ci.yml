@@ -1,8 +1,7 @@
 name: CI
 
+# main only changes through pull requests, so the PR run is the one that counts.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -10,19 +9,7 @@ permissions:
 
 jobs:
   build:
-    name: Build and check ABI (JDK 25)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 25
-      - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew build checkKotlinAbi
-
-  test-jdk17:
-    name: Tests on JDK 17
+    name: Build, check ABI, and test on JDK 17
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,4 +21,5 @@ jobs:
             17
             25
       - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew build checkKotlinAbi
       - run: ./gradlew test -PtestJdk=17 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_25_X64
