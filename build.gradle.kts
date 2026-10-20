@@ -34,7 +34,7 @@ dependencies {
 
 tasks.test {
   useJUnitPlatform()
-  // CI passes -PtestJdk=17 (or 21) to prove the published bytecode runs on those JDKs.
+  // CI passes -PtestJdk=17 to prove the published bytecode runs on those JDKs.
   providers.gradleProperty("testJdk").orNull?.let { jdk ->
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(jdk.toInt())) })
   }
