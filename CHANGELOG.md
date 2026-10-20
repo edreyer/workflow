@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Additive. Nothing that compiled against 0.10 stops compiling, though two APIs are now deprecated.
+
+- Added `Pipeline.branch(ifTrue, ifFalse) { predicate }`, which runs one of two steps that produce the same next state type.
+- Added `Pipeline.then(step, input = { ... }) { output -> ... }`, which runs a step on part of the state and merges its output back into it.
+- Added reusable pipelines. `pipeline<S, E>()` starts a sequence of steps outside a use case, and `Pipeline.then(pipeline)` appends it. Its steps keep their own ids.
+- Added `Workflow.mapInput` and `Workflow.mapOutput`, next to `mapError`.
+- Added `useCaseConfig { launchTimeout(duration) }`, a default timeout for `thenLaunch` calls that pass none. A use case waits for launched work before returning, even when a step fails, so this bounds that wait.
+- While a use case runs, `WorkflowContext.CORRELATION_ID` is in the SLF4J MDC as `correlationId`. This adds a dependency on `kotlinx-coroutines-slf4j`.
+- `UseCaseSummary.launchedFailures` is now derived from `LaunchedFailureEvent`s.
+- Deprecated `WorkflowContext.LAUNCHED_FAILURES`, because the context should hold only what the caller passed. The library still populates it. Read `UseCaseSummary.launchedFailures` or the `LaunchedFailureEvent`s instead. It is removed in 1.0.
+- Deprecated `WorkflowExecution.workflowName`, which always equals `workflowId`. It is removed in 1.0.
 - Documented that a use case returns only after its `thenLaunch` work finishes, including when a later step fails, and that `timeout` bounds the wait.
 - Documented raising a typed error for a step timeout with `withTimeoutOrNull(...) ?: raise(...)`.
 - Documented that a use case is not a step, and how to compose use cases instead.

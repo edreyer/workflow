@@ -108,6 +108,31 @@ public fun <I, O, E, F> Workflow<I, O, E>.mapError(transform: (E) -> F): Workflo
 }
 
 /**
+ * Returns a step that converts its input with [transform] before running this one, so a step written
+ * for one type fits a pipeline whose state is another. The step keeps its id.
+ *
+ * ```kotlin
+ * .thenLaunch(sendReceipt.mapInput { order: PaidOrder -> order.customer })
+ * ```
+ */
+public fun <I, J, O, E> Workflow<I, O, E>.mapInput(transform: (J) -> I): Workflow<J, O, E> {
+  val original = this
+  return Workflow(id) { input -> runInside(original, transform(input)) }
+}
+
+/**
+ * Returns a step that runs this one and converts its output with [transform]. The step keeps its id.
+ */
+public fun <I, O, P, E> Workflow<I, O, E>.mapOutput(transform: (O) -> P): Workflow<I, P, E> {
+  val original = this
+  return Workflow(id) { input -> transform(runInside(original, input)) }
+}
+
+/** Runs [workflow]'s block in this scope, so it shares this step's events and execution record. */
+internal suspend fun <I, O, E> WorkflowStepScope<E>.runInside(workflow: Workflow<I, O, E>, input: I): O =
+  with(workflow) { this@runInside.execute(input) }
+
+/**
  * Runs this workflow on its own and returns its new state, emitted events, and the context it ran with.
  *
  * Use cases run their steps for you; call this directly to unit-test a step.

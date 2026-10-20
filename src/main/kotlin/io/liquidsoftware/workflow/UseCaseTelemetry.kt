@@ -71,7 +71,8 @@ internal fun buildSummary(
         workflowId = recorder.failedStepId(it),
       )
     },
-    launchedFailures = context[WorkflowContext.LAUNCHED_FAILURES].orEmpty(),
+    launchedFailures = finalResult?.events.orEmpty().filterIsInstance<LaunchedFailureEvent>()
+      .map { "thenLaunch failure ${it.workflowId} (${it.message})" },
     correlationId = context[WorkflowContext.CORRELATION_ID],
   ).also { it.errorMessage = error?.messageText() }
 }

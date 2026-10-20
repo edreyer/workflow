@@ -125,7 +125,7 @@ val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-o
 }
 ```
 
-The third type argument is the error type the step can raise. Use `Nothing` for a step that never raises; it fits any pipeline. `guard<T, OrderError>("id") { }` builds a reusable pass-through check the same way.
+The third type argument is the error type the step can raise. Use `Nothing` for a step that never raises; it fits any pipeline. `guard<T, OrderError>("id") { }` builds a reusable pass-through check the same way. `mapInput`, `mapOutput`, and `mapError` adapt a reusable step to a pipeline whose types differ, and keep its id.
 
 Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `Failure.Unexpected`. To give a timeout a domain meaning instead, use `withTimeoutOrNull` and raise your own error: `withTimeoutOrNull(5.seconds) { payments.capture(order) } ?: raise(OrderError.PaymentTimedOut)`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
 
@@ -152,12 +152,15 @@ val processOrder: UseCase<ProcessOrder, ApiError, OrderReceipt> =
 | `startWith { input -> state }` | Convert public input into the first state. |
 | `.then("id") { state -> next }` | Run the next step, written inline. Its output becomes the new state. |
 | `.then(step)` | Run a reusable step defined with `workflow`. |
+| `.then(step, input = { it.order }) { out -> copy(order = out) }` | Run a step on part of the state and merge its output back. The current state is `this`. |
+| `.then(fulfilOrder)` | Append a reusable pipeline built with `pipeline<S, E>()`. Its steps keep their own ids. |
 | `.guard("id") { state -> }` | Check the state with `ensure` or `raise` and pass it on unchanged. |
 | `.thenIf(step) { state -> Boolean }` | Run a step only when the predicate matches. The step must keep the state type. |
+| `.branch(ifTrue, ifFalse) { state -> Boolean }` | Run one of two steps that produce the same next state type. |
 | `.parallel(a, b, ...)` | Run side-effect steps concurrently and keep the current state. |
 | `.parallelJoin(a, b, ...) { x, y -> state }` | Run 2 to 8 steps concurrently and merge their outputs into a new state. The current state is `this`. |
 | `.parallelJoin(..., policy = ParallelErrorPolicy.FailFast) { ... }` | Cancel the remaining branches on the first failure. The default, `WaitAll`, waits for all branches and returns the first error by parameter order. |
-| `.thenLaunch(step, timeout = 2.seconds)` | Start side-effect work that later steps don't wait for. The use case still returns only after launched work finishes, even when a step fails, so pass `timeout` for anything that talks to the network. Its failures never fail the use case. |
+| `.thenLaunch(step, timeout = 2.seconds)` | Start side-effect work that later steps don't wait for. The use case still returns only after launched work finishes, even when a step fails, so pass `timeout`, or set `launchTimeout` in the config, for anything that talks to the network. Its failures never fail the use case. |
 | `.awaitLaunched()` | Wait for launched work when a later step needs its events or failures. Pending work is always merged before `.result`. |
 | `.result { state -> output }` | Project public output. `events`, `context`, and `requireEvent<T>()` are in scope. Required. |
 | `.logging { success { }; failure { } }` | Add explicit fields to the debug finish log. |
@@ -277,6 +280,8 @@ val processOrder = useCase("ProcessOrder", errors = ::toApiError, config = appCo
 ```
 
 `onSummary` receives a `UseCaseSummary` after every invocation: name, outcome, duration, event count, executed steps, the failing step and error type, launched failures, and correlation ID. Error messages are redacted unless you call `summary.withErrorMessages()`.
+
+When the context has a `WorkflowContext.CORRELATION_ID`, the use case puts it in the SLF4J MDC as `correlationId` while it runs, so your own log lines inside steps carry it too.
 
 Add per-use-case log fields after `.result`. They are typed to the final result and to the `Failure` of the use case's error type, and are only evaluated when debug logging is enabled:
 

@@ -23,16 +23,19 @@ public class UseCaseConfig private constructor(
   internal val outcomeStyle: OutcomeStyle,
   internal val defaultSummaryFields: DefaultSummaryFields,
   internal val summaryListeners: List<(UseCaseSummary) -> Unit>,
+  internal val launchTimeout: Duration?,
 ) {
   internal fun copy(
     outcomeStyle: OutcomeStyle = this.outcomeStyle,
     defaultSummaryFields: DefaultSummaryFields = this.defaultSummaryFields,
     summaryListeners: List<(UseCaseSummary) -> Unit> = this.summaryListeners,
-  ): UseCaseConfig = UseCaseConfig(outcomeStyle, defaultSummaryFields, summaryListeners)
+    launchTimeout: Duration? = this.launchTimeout,
+  ): UseCaseConfig = UseCaseConfig(outcomeStyle, defaultSummaryFields, summaryListeners, launchTimeout)
 
   public companion object {
-    /** Plain outcomes, default summary fields enabled, and no summary listeners. */
-    public val Default: UseCaseConfig = UseCaseConfig(OutcomeStyle.Plain, DefaultSummaryFields.Enabled, emptyList())
+    /** Plain outcomes, default summary fields enabled, no summary listeners, and no launch timeout. */
+    public val Default: UseCaseConfig =
+      UseCaseConfig(OutcomeStyle.Plain, DefaultSummaryFields.Enabled, emptyList(), launchTimeout = null)
   }
 }
 
@@ -71,6 +74,16 @@ public class UseCaseConfigBuilder internal constructor(private var config: UseCa
    */
   public fun onSummary(listener: (UseCaseSummary) -> Unit) {
     config = config.copy(summaryListeners = config.summaryListeners + listener)
+  }
+
+  /**
+   * Limits how long `thenLaunch` work may run when the call passes no `timeout` of its own. The use
+   * case waits for launched work before it returns, even when a step fails, so this bounds that
+   * wait. Work that runs longer is cancelled and reported as a launched failure.
+   */
+  public fun launchTimeout(value: Duration) {
+    require(value.isPositive()) { "launchTimeout must be positive" }
+    config = config.copy(launchTimeout = value)
   }
 
   internal fun build(): UseCaseConfig = config

@@ -9,7 +9,10 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.slf4j.MDCContext
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.slf4j.MDC
 import java.time.Instant
 import kotlin.time.Duration
 import kotlin.time.TimeSource
@@ -98,6 +101,19 @@ public class UseCaseBuilder<I, E> internal constructor() {
 }
 
 /**
+ * Starts a reusable sequence of steps that takes state [S] and raises [E]. Add steps to it like any
+ * pipeline, and append it to a use case's pipeline with `then`. It needs no `result`.
+ *
+ * ```kotlin
+ * val fulfilOrder: Pipeline<PaidOrder, OrderError, Shipment> =
+ *   pipeline<PaidOrder, OrderError>()
+ *     .then(reserveInventory)
+ *     .then(shipOrder)
+ * ```
+ */
+public fun <S, E> pipeline(): Pipeline<S, E, S> = Pipeline({ it }, emptyList())
+
+/**
  * An immutable, typed chain of workflow steps whose current state type is [S].
  *
  * Every method returns a new pipeline, so a step whose input does not accept [S] is a compile error.
@@ -153,6 +169,53 @@ public class Pipeline<I, E, S> internal constructor(
   }
 
   /**
+   * Runs [ifTrue] when [predicate] matches the current state, and [ifFalse] otherwise. Both produce
+   * the same next state type, and whichever runs is recorded under its own id. The predicate's
+   * receiver gives access to the events and context so far.
+   *
+   * ```kotlin
+   * .branch(ifTrue = expressShipping, ifFalse = standardShipping) { order -> order.expedited }
+   * ```
+   */
+  public fun <N> branch(
+    ifTrue: Workflow<S, N, E>,
+    ifFalse: Workflow<S, N, E>,
+    predicate: WorkflowResult<S>.(state: S) -> Boolean,
+  ): Pipeline<I, E, N> {
+    @Suppress("UNCHECKED_CAST")
+    val untyped = predicate as WorkflowResult<Any?>.(Any?) -> Boolean
+    return add(BranchStep(ifTrue, ifFalse, untyped))
+  }
+
+  /**
+   * Runs [workflow] on part of the current state and puts its output back. [input] picks what the
+   * step needs; [merge] receives the current state as its receiver and the step's output, and
+   * returns the next state. The step keeps its own id in execution history.
+   *
+   * ```kotlin
+   * .then(reserveInventory, input = { it.order }) { reservation -> copy(reservation = reservation) }
+   * ```
+   */
+  public fun <A, O, N> then(
+    workflow: Workflow<A, O, E>,
+    input: (state: S) -> A,
+    merge: S.(output: O) -> N,
+  ): Pipeline<I, E, N> = then(Workflow<S, N, E>(workflow.id) { state -> state.merge(runInside(workflow, input(state))) })
+
+  /**
+   * Appends the steps of a reusable [pipeline], built with [io.liquidsoftware.workflow.pipeline],
+   * as if they were written here. Each of its steps keeps its own id in execution history.
+   *
+   * ```kotlin
+   * val fulfilOrder = pipeline<PaidOrder, OrderError>().then(reserveInventory).then(shipOrder)
+   *
+   * startWith { ... }.then(capturePayment).then(fulfilOrder).result { ... }
+   * ```
+   */
+  public fun <N> then(pipeline: Pipeline<in S, out E, N>): Pipeline<I, E, N> =
+    Pipeline(start, steps + StartStep(pipeline.start) + pipeline.steps)
+
+  /**
    * Runs side-effect [workflows] concurrently on the current state and keeps that state. Their
    * outputs are ignored; their events are merged.
    */
@@ -162,9 +225,11 @@ public class Pipeline<I, E, S> internal constructor(
   ): Pipeline<I, E, S> = add(ParallelSideEffectStep(workflows.toList(), policy))
 
   /**
-   * Starts a side-effect [workflow] without waiting for it. Its events and failures are merged at the
-   * next [awaitLaunched], or when the pipeline finishes. A failure or [timeout] never fails the use
-   * case; it is reported as a [LaunchedFailureEvent] and in [WorkflowContext.LAUNCHED_FAILURES].
+   * Starts a side-effect [workflow] that later steps don't wait for. Its events and failures are
+   * merged at the next [awaitLaunched], or when the pipeline finishes; the use case returns only
+   * after it finishes, even when a later step fails. A failure or [timeout] never fails the use
+   * case; it is reported as a [LaunchedFailureEvent]. Without a [timeout], the config's
+   * [UseCaseConfigBuilder.launchTimeout] applies.
    */
   public fun thenLaunch(workflow: Workflow<S, Any?, E>, timeout: Duration? = null): Pipeline<I, E, S> =
     add(LaunchStep(workflow, timeout))
@@ -314,6 +379,7 @@ internal class PipelineRun(
   val coroutineScope: CoroutineScope,
   val recorder: ExecutionRecorder,
   var context: WorkflowContext,
+  val launchTimeout: Duration?,
 ) {
   val events = mutableListOf<Event>()
   val launched = mutableListOf<LaunchedJob>()
@@ -366,6 +432,28 @@ private class ConditionalStep(
   }
 }
 
+private class BranchStep(
+  ifTrue: Workflow<*, *, *>,
+  ifFalse: Workflow<*, *, *>,
+  private val predicate: WorkflowResult<Any?>.(Any?) -> Boolean,
+) : PipelineStep {
+  private val ifTrue = ifTrue.untyped()
+  private val ifFalse = ifFalse.untyped()
+
+  override suspend fun Raise<Failure<Any?>>.execute(state: Any?, run: PipelineRun): Any? {
+    val matches = catchingExceptions { run.snapshot(state).predicate(state) }
+    val result = (if (matches) ifTrue else ifFalse).runStep(state, run.context, run.recorder).bind()
+    run.absorb(result)
+    return result.state
+  }
+}
+
+/** Runs the start of an appended pipeline, which converts its input into its first state. */
+private class StartStep(private val start: suspend Raise<Failure<Any?>>.(Any?) -> Any?) : PipelineStep {
+  override suspend fun Raise<Failure<Any?>>.execute(state: Any?, run: PipelineRun): Any? =
+    catchingExceptions { start(state) }
+}
+
 private class ParallelSideEffectStep(
   workflows: List<Workflow<*, *, *>>,
   private val policy: ParallelErrorPolicy,
@@ -387,13 +475,14 @@ private class LaunchStep(
   override suspend fun Raise<Failure<Any?>>.execute(state: Any?, run: PipelineRun): Any? {
     val context = run.context
     val recorder = run.recorder.forLaunched()
+    val limit = timeout ?: run.launchTimeout
     val deferred = run.coroutineScope.async {
-      if (timeout == null) {
+      if (limit == null) {
         workflow.runStep(state, context, recorder)
       } else {
         val startTime = Instant.now()
-        withTimeoutOrNull(timeout) { workflow.runStep(state, context, recorder) }
-          ?: timedOut(startTime, timeout, recorder)
+        withTimeoutOrNull(limit) { workflow.runStep(state, context, recorder) }
+          ?: timedOut(startTime, limit, recorder)
       }
     }
     run.launched += LaunchedJob(workflow.id, deferred)
@@ -423,6 +512,7 @@ private data object AwaitLaunchedStep : PipelineStep {
   }
 }
 
+@Suppress("DEPRECATION") // LAUNCHED_FAILURES is kept populated until it is removed.
 private suspend fun drainLaunched(run: PipelineRun) {
   if (run.launched.isEmpty()) return
   val pending = run.launched.toList()
@@ -454,6 +544,9 @@ private fun Failure<*>.describe(): String = when (this) {
   is Failure.Unexpected -> if (cause is LaunchTimeoutException) cause.message.orEmpty() else "An exception occurred"
 }
 
+/** The SLF4J MDC key that holds [WorkflowContext.CORRELATION_ID] while a use case runs. */
+private const val MDC_CORRELATION_ID = "correlationId"
+
 internal class UseCaseRunner<I, E, R, S, O>(
   private val name: String,
   private val errors: (Failure<E>) -> R,
@@ -462,6 +555,12 @@ internal class UseCaseRunner<I, E, R, S, O>(
 ) : UseCase<I, R, O> {
 
   override suspend fun invoke(input: I, context: WorkflowContext): Either<R, O> {
+    val correlationId = context[WorkflowContext.CORRELATION_ID] ?: return runPipeline(input, context)
+    val mdc = MDC.getCopyOfContextMap().orEmpty() + (MDC_CORRELATION_ID to correlationId)
+    return withContext(MDCContext(mdc)) { runPipeline(input, context) }
+  }
+
+  private suspend fun runPipeline(input: I, context: WorkflowContext): Either<R, O> {
     val mark = TimeSource.Monotonic.markNow()
     logUseCaseStarted(name)
     val recorder = ExecutionRecorder()
@@ -469,7 +568,7 @@ internal class UseCaseRunner<I, E, R, S, O>(
     var runState: PipelineRun? = null
 
     val outcome: Either<Failure<Any?>, O> = coroutineScope {
-      val pipelineRun = PipelineRun(this, recorder, context).also { runState = it }
+      val pipelineRun = PipelineRun(this, recorder, context, config.launchTimeout).also { runState = it }
       either {
         val pipeline = definition.pipeline
         var state = catchingExceptions { pipeline.start(this, input) }

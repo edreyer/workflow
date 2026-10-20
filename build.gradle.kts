@@ -25,6 +25,8 @@ dependencies {
   api(platform(libs.arrow.stack))
   api(libs.arrow.core)
   implementation(libs.slf4j.api)
+  // Keeps the correlation ID in the SLF4J MDC across coroutine thread switches.
+  implementation(libs.kotlinx.coroutines.slf4j)
 
   // Testing
   testImplementation(kotlin("test"))
