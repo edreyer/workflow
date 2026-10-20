@@ -305,6 +305,9 @@ public final class io/liquidsoftware/workflow/WorkflowKt {
 	public static final fun mapError (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/Workflow;
 	public static final fun mapInput (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/Workflow;
 	public static final fun mapOutput (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function1;)Lio/liquidsoftware/workflow/Workflow;
+	public static final fun recover (Lio/liquidsoftware/workflow/Workflow;Lkotlin/jvm/functions/Function4;)Lio/liquidsoftware/workflow/Workflow;
+	public static final fun retry (Lio/liquidsoftware/workflow/Workflow;Larrow/resilience/Schedule;)Lio/liquidsoftware/workflow/Workflow;
+	public static final fun timeout-8Mi8wO0 (Lio/liquidsoftware/workflow/Workflow;JLkotlin/jvm/functions/Function0;)Lio/liquidsoftware/workflow/Workflow;
 	public static final fun workflow (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lio/liquidsoftware/workflow/Workflow;
 }
 

@@ -1,12 +1,17 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
+import arrow.core.Some
 import arrow.core.raise.Raise
 import arrow.core.raise.either
+import arrow.resilience.Schedule
+import arrow.resilience.retry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
+import kotlin.time.Duration
 import kotlin.time.TimeSource
 
 /**
@@ -126,6 +131,111 @@ public fun <I, J, O, E> Workflow<I, O, E>.mapInput(transform: (J) -> I): Workflo
 public fun <I, O, P, E> Workflow<I, O, E>.mapOutput(transform: (O) -> P): Workflow<I, P, E> {
   val original = this
   return Workflow(id) { input -> transform(runInside(original, input)) }
+}
+
+/**
+ * Returns a step that fails with [error] when this one takes longer than [duration]. The step keeps
+ * its id, and the timeout is a raised error the use case's `errors` mapper can handle, not a
+ * [Failure.Unexpected].
+ *
+ * ```kotlin
+ * val chargeCard = workflow<PricedOrder, PaidOrder, PaymentError>("charge-card") { payments.capture(it) }
+ *   .timeout(2.seconds) { PaymentError.TimedOut }
+ * ```
+ *
+ * Cancelling the use case is still cancellation. A `withTimeout` inside the step's own block keeps
+ * failing as [Failure.Unexpected].
+ */
+public fun <I, O, E> Workflow<I, O, E>.timeout(duration: Duration, error: () -> E): Workflow<I, O, E> {
+  require(duration.isPositive()) { "timeout must be positive, was $duration" }
+  val original = this
+  return Workflow(id) { input ->
+    val output = withTimeoutOrNull(duration) { Some(runInside(original, input)) } ?: raise(error())
+    output.value
+  }
+}
+
+/**
+ * Returns a step that runs this one again while [schedule] allows it. After each failed attempt the
+ * schedule receives the [Failure] and decides whether to try again and how long to wait. When it
+ * stops, the step fails with the last failure. The step keeps its id and is recorded once.
+ *
+ * Only the events of the successful attempt are kept, so a retried step never reports work from an
+ * attempt that failed. Cancelling the use case is never retried.
+ *
+ * Retry thrown exceptions and transient errors, not domain decisions:
+ *
+ * ```kotlin
+ * val transient = Schedule.exponential<Failure<PaymentError>>(200.milliseconds)
+ *   .and(Schedule.recurs(2))
+ *   .doWhile { failure, _ -> failure is Failure.Unexpected || failure == Failure.Raised(PaymentError.TimedOut) }
+ *
+ * val chargeCard = workflow<PricedOrder, PaidOrder, PaymentError>("charge-card") { payments.capture(it) }
+ *   .timeout(2.seconds) { PaymentError.TimedOut }
+ *   .retry(transient)
+ * ```
+ *
+ * Order matters: `.timeout(d).retry(s)` limits each attempt, and `.retry(s).timeout(d)` limits all
+ * attempts together.
+ */
+public fun <I, O, E> Workflow<I, O, E>.retry(schedule: Schedule<Failure<E>, *>): Workflow<I, O, E> {
+  val original = this
+  return Workflow(id) { input ->
+    val result = failures.retry(schedule) { attempt(original, input).bind() }
+    absorb(result)
+    result.state
+  }
+}
+
+/**
+ * Returns a step that handles the errors this one raises with [handler], which returns an output in
+ * their place or raises an error of type [F]. The step keeps its id.
+ *
+ * ```kotlin
+ * .then(chargeCard.recover { order, error ->
+ *   if (error is PaymentError.Declined) queueForManualReview(order) else raise(OrderError.Payment(error))
+ * })
+ * ```
+ *
+ * Events from the failed run are dropped. Thrown exceptions are not handled: they stay
+ * [Failure.Unexpected], so a bug is never turned into a fallback.
+ */
+public fun <I, O, E, F> Workflow<I, O, E>.recover(
+  handler: suspend WorkflowStepScope<F>.(input: I, error: E) -> O,
+): Workflow<I, O, F> {
+  val original = this
+  return Workflow(id) { input ->
+    when (val outcome = attempt(original, input)) {
+      is Either.Right -> outcome.value.also { absorb(it) }.state
+      is Either.Left -> when (val failure = outcome.value) {
+        is Failure.Raised -> handler(input, failure.error)
+        is Failure.Unexpected -> failures.raise(failure)
+      }
+    }
+  }
+}
+
+/**
+ * Runs [workflow]'s block with its own event buffer and returns the outcome, so a caller can drop a
+ * failed run's events. Exceptions, including a timeout the block started itself, become
+ * [Failure.Unexpected]; cancellation of this coroutine propagates.
+ */
+internal suspend fun <I, O, E> WorkflowStepScope<*>.attempt(
+  workflow: Workflow<I, O, E>,
+  input: I,
+): Either<Failure<E>, WorkflowResult<O>> {
+  val outcome: Either<Failure<Any?>, WorkflowResult<O>> = try {
+    either {
+      val scope = WorkflowStepScope<E>(this, context, recorder)
+      scope.toResult(catchingExceptions { with(workflow) { scope.execute(input) } })
+    }
+  } catch (ex: CancellationException) {
+    if (!currentCoroutineContext().isActive) throw ex
+    Either.Left(Failure.Unexpected(ex))
+  }
+  // Only this workflow's errors, and errors of steps nested in it, are raised as Failure.Raised.
+  @Suppress("UNCHECKED_CAST")
+  return outcome as Either<Failure<E>, WorkflowResult<O>>
 }
 
 /** Runs [workflow]'s block in this scope, so it shares this step's events and execution record. */

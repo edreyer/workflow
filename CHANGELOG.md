@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Additive.
+
+- Added `Workflow.timeout(duration) { error }`, which fails a step with a typed error when it runs too long.
+- Added `Workflow.retry(schedule)`, which runs a step again while an Arrow `Schedule<Failure<E>, *>` allows it. Only the successful attempt's events are kept, and the step is recorded once.
+- Added `Workflow.recover { input, error -> }`, which handles a step's raised errors with an output or a new error type. Exceptions are not handled.
+- `arrow-resilience` is now an `api` dependency, versioned by the Arrow BOM, because `Schedule` is part of the public API.
+
 ## 0.11.0 - 2026-10-20
 
 Additive. Nothing that compiled against 0.10 stops compiling, though two APIs are now deprecated.
