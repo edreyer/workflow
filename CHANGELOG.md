@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 - 2026-10-20
 
 Additive. Nothing that compiled against 0.10 stops compiling, though two APIs are now deprecated.
 
