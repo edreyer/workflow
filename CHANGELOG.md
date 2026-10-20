@@ -7,7 +7,7 @@
 - Documented that a use case is not a step, and how to compose use cases instead.
 - README now states that this is in-process orchestration, not a durable workflow engine, and has a Testing section.
 - Removed the outdated `Workflow Examples.ipynb`, which used the pre-0.10 API.
-- Added a GitHub Actions build that checks the ABI and runs the tests on JDK 17 and 25, and Dependabot updates.
+- Added a GitHub Actions build that checks the ABI and runs the tests on JDK 17 for each pull request, and Dependabot updates.
 
 ## 0.10.0 - 2026-10-13
 
