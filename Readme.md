@@ -127,7 +127,22 @@ val validateOrder = workflow<OrderDraft, ValidatedOrder, OrderError>("validate-o
 
 The third type argument is the error type the step can raise. Use `Nothing` for a step that never raises; it fits any pipeline. `guard<T, OrderError>("id") { }` builds a reusable pass-through check the same way. `mapInput`, `mapOutput`, and `mapError` adapt a reusable step to a pipeline whose types differ, and keep its id.
 
-Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `Failure.Unexpected`. To give a timeout a domain meaning instead, use `withTimeoutOrNull` and raise your own error: `withTimeoutOrNull(5.seconds) { payments.capture(order) } ?: raise(OrderError.PaymentTimedOut)`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
+Import `ensure` and the other `Raise` helpers from `arrow.core.raise`, or from `arrow.core.raise.context` inside `context(_: Raise<...>)` functions. Thrown exceptions, including a timeout a step starts with its own `withTimeout`, become `Failure.Unexpected`. To unit-test a reusable step, call it directly: `validateOrder(draft)` returns `Either<Failure<OrderError>, WorkflowResult<ValidatedOrder>>` with the new state, the events, and the context.
+
+A reusable step can be given a timeout, retries, and a fallback. Each returns a step with the same id. Retry policy is an Arrow [`Schedule`](https://arrow-kt.io/learn/resilience/retry-and-repeat/), which receives each `Failure`:
+
+```kotlin
+val transient = Schedule.exponential<Failure<PaymentError>>(200.milliseconds)
+  .and(Schedule.recurs(2))
+  .doWhile { failure, _ -> failure is Failure.Unexpected || failure == Failure.Raised(PaymentError.TimedOut) }
+
+val chargeCard = workflow<PricedOrder, PaidOrder, PaymentError>("charge-card") { payments.capture(it) }
+  .timeout(2.seconds) { PaymentError.TimedOut } // a raised error, not Failure.Unexpected
+  .retry(transient)                             // keeps only the successful attempt's events
+  .recover { order, error ->                    // raised errors only; exceptions pass through
+    if (error is PaymentError.Declined) queueForManualReview(order) else raise(error)
+  }
+```
 
 ## Composing Steps
 

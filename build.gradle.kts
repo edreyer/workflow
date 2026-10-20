@@ -21,9 +21,10 @@ dependencies {
   // Kotlin Coroutines
   implementation(libs.kotlinx.coroutines.core)
 
-  // Either and Raise are part of the public API, so consumers need Arrow on their compile classpath.
+  // Either, Raise and Schedule are part of the public API, so consumers need Arrow on their compile classpath.
   api(platform(libs.arrow.stack))
   api(libs.arrow.core)
+  api(libs.arrow.resilience)
   implementation(libs.slf4j.api)
   // Keeps the correlation ID in the SLF4J MDC across coroutine thread switches.
   implementation(libs.kotlinx.coroutines.slf4j)

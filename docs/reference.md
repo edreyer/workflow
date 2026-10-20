@@ -335,6 +335,37 @@ Adapt a reusable step to a different input or output type with `mapInput` and `m
 .thenLaunch(sendReceipt.mapInput { order: PaidOrder -> order.customer })
 ```
 
+### Timeouts, Retries And Fallbacks
+
+Three combinators wrap a reusable step. Like `mapError`, each returns a step with the same id, so it works anywhere a step goes. Name an inline step with `workflow(id) { }` first.
+
+| Combinator | Effect |
+| --- | --- |
+| `timeout(duration) { error }` | Cancels the step after `duration` and raises `error` as `Failure.Raised`, attributed to the step. |
+| `retry(schedule)` | Runs the step again while the Arrow `Schedule<Failure<E>, *>` allows it. The schedule receives each failure and decides whether to try again and how long to wait. When it stops, the step fails with the last failure. |
+| `recover { input, error -> }` | Handles a raised error by returning an output, or by raising an error of a new type `F`. The result is a `Workflow<I, O, F>`. |
+
+```kotlin
+val transient = Schedule.exponential<Failure<PaymentError>>(200.milliseconds)
+  .and(Schedule.recurs(2))
+  .doWhile { failure, _ -> failure is Failure.Unexpected || failure == Failure.Raised(PaymentError.TimedOut) }
+
+val chargeCard = workflow<PricedOrder, PaidOrder, PaymentError>("charge-card") { payments.capture(it) }
+  .timeout(2.seconds) { PaymentError.TimedOut }
+  .retry(transient)
+  .recover { order, error ->
+    if (error is PaymentError.Declined) queueForManualReview(order) else raise(error)
+  }
+```
+
+- Order matters and reads outside-in. `.timeout(2.seconds).retry(s)` limits each attempt to 2 seconds. `.retry(s).timeout(5.seconds)` limits all attempts together.
+- Retry thrown exceptions (`Failure.Unexpected`) and transient raised errors. A raised domain error is usually a decision, so let the schedule's `doWhile` stop on it.
+- Only the successful attempt's events are kept. A failed attempt's events, and the events of a run that `recover` handled, are dropped.
+- The step is recorded once in the execution history, with its total duration.
+- Cancelling the use case is never retried or recovered. A `withTimeout` inside the step's own block still fails as `Failure.Unexpected`.
+- `recover` handles raised errors only. Exceptions stay `Failure.Unexpected`, so a bug never becomes a fallback.
+- Schedule delays use `delay`, so tests under `runTest` skip them in virtual time.
+
 ### Running A Step On Its Own
 
 Call a workflow directly to unit-test it:
@@ -368,7 +399,7 @@ A failed use case or step reports a `Failure<E>`:
 | Case | Meaning |
 | --- | --- |
 | `Failure.Raised(error)` | A step, `startWith`, or `result { }` raised `error`. |
-| `Failure.Unexpected(cause)` | Something threw: a step, `startWith`, a predicate, or `result { }`. This includes a step's own timeout (use `withTimeoutOrNull(...) ?: raise(...)` to raise a typed error instead) and a `thenLaunch` timeout. A use case assembled wrongly, such as a missing `requireEvent` or a `startWith` that returned an `Either`, fails with a `WorkflowCompositionException` as the cause, so logs and summaries name it. |
+| `Failure.Unexpected(cause)` | Something threw: a step, `startWith`, a predicate, or `result { }`. This includes a step's own timeout (use `Workflow.timeout` to raise a typed error instead) and a `thenLaunch` timeout. A use case assembled wrongly, such as a missing `requireEvent` or a `startWith` that returned an `Either`, fails with a `WorkflowCompositionException` as the cause, so logs and summaries name it. |
 
 The `errors` mapper receives the `Failure`, so its `when` is exhaustive with no `else`. Adding a case to `OrderError` is a compile error until the mapper handles it:
 
