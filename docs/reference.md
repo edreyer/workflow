@@ -204,7 +204,7 @@ startWith { command -> command.toValidatedOrder() }
 
 A launched failure or timeout never fails the use case. Each one is recorded as a `LaunchedFailureEvent` (with `workflowId` and a `message` free of user data: the raised error's class name, `An exception occurred`, or `thenLaunch timeout: <id>`) and as a message in `context[WorkflowContext.LAUNCHED_FAILURES]`.
 
-Launched work runs inside the use case invocation. Cancelling the caller cancels it too.
+Launched work runs inside the use case invocation, so later steps don't wait for it but the use case does. `invoke` returns only after every launched step has finished, on the failure path too: when a later step fails, launched work is not cancelled, and the failed result waits for it. Without a `timeout` that wait is unbounded, so pass one for anything that talks to the network. Cancelling the caller cancels launched work too.
 
 ## Result Projection
 
@@ -320,7 +320,7 @@ A failed use case or step reports a `Failure<E>`:
 | Case | Meaning |
 | --- | --- |
 | `Failure.Raised(error)` | A step, `startWith`, or `result { }` raised `error`. |
-| `Failure.Unexpected(cause)` | Something threw: a step, `startWith`, a predicate, or `result { }`. This includes a step's own timeout and a `thenLaunch` timeout. A use case assembled wrongly, such as a missing `requireEvent` or a `startWith` that returned an `Either`, fails with a `WorkflowCompositionException` as the cause, so logs and summaries name it. |
+| `Failure.Unexpected(cause)` | Something threw: a step, `startWith`, a predicate, or `result { }`. This includes a step's own timeout (use `withTimeoutOrNull(...) ?: raise(...)` to raise a typed error instead) and a `thenLaunch` timeout. A use case assembled wrongly, such as a missing `requireEvent` or a `startWith` that returned an `Either`, fails with a `WorkflowCompositionException` as the cause, so logs and summaries name it. |
 
 The `errors` mapper receives the `Failure`, so its `when` is exhaustive with no `else`. Adding a case to `OrderError` is a compile error until the mapper handles it:
 

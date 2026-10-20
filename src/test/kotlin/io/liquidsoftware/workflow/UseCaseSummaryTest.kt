@@ -1,5 +1,6 @@
 package io.liquidsoftware.workflow
 
+import arrow.core.Either
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -133,6 +134,20 @@ class UseCaseSummaryTest {
 
     assertEquals(1, summaries.single().eventsCount)
     assertEquals("failing", summaries.single().rootError?.workflowId)
+  }
+
+  @Test
+  fun `mapError on a parallelJoin branch keeps the inner step as the failing step`() = runTest {
+    val inner = workflow<Input, Int, String>("inner-step") { raise("down") }
+    val other = workflow<Input, Int, Nothing>("other") { 1 }
+    val mapped: UseCase<Input, Failure<TestError>, Int> = useCase(name = "Mapped", config = config) {
+      startWith { it }
+        .parallelJoin(inner.mapError { TestError.Down(it) }, other) { a, b -> a + b }
+        .result { it }
+    }
+
+    assertEquals(Either.Left(Failure.Raised(TestError.Down("down"))), mapped(Input(1)))
+    assertEquals("inner-step", summaries.single().rootError?.workflowId)
   }
 
   @Test

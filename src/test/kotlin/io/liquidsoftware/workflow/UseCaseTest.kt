@@ -3,13 +3,16 @@ package io.liquidsoftware.workflow
 import arrow.core.Either
 import arrow.core.raise.ensure
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class UseCaseTest {
 
@@ -204,6 +207,21 @@ class UseCaseTest {
     }
 
     assertEquals(Either.Left(Failure.Raised("down")), useCase(PlaceOrder("o-1", 1)))
+  }
+
+  @Test
+  fun `parallel FailFast cancels the remaining side effects`() = runTest {
+    var slowFinished = false
+    val slow = workflow<PricedOrder, Unit, String>("slow") { delay(10.seconds); slowFinished = true }
+    val failing = workflow<PricedOrder, Unit, String>("failing") { raise("down") }
+    val useCase: UseCase<PlaceOrder, Failure<String>, String> = useCase("Test") {
+      startWith { command -> PricedOrder(command.orderId, 100) }
+        .parallel(slow, failing, policy = ParallelErrorPolicy.FailFast)
+        .result { it.orderId }
+    }
+
+    assertEquals(Either.Left(Failure.Raised("down")), useCase(PlaceOrder("o-1", 1)))
+    assertFalse(slowFinished)
   }
 
   @Test

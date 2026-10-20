@@ -81,6 +81,21 @@ class ThenLaunchTest {
   }
 
   @Test
+  fun `a failing step still waits for launched work`() = runTest {
+    var launchedFinished = false
+    val slow = workflow<Seed, Unit, Nothing>("slow") { delay(5.seconds); launchedFinished = true }
+    val useCase: UseCase<Seed, Failure<LaunchError>, Unit> = useCase("Test") {
+      startWith { it }
+        .thenLaunch(slow)
+        .then(failing("after-launch"))
+        .result { }
+    }
+
+    assertEquals(Either.Left(Failure.Raised(LaunchError("after-launch"))), useCase(Seed("x")))
+    assertTrue(launchedFinished)
+  }
+
+  @Test
   fun `failures and timeouts are reported without failing the use case`() = runTest {
     val useCase: UseCase<Seed, Failure<LaunchError>, Pair<List<Pair<String, String>>, List<String>>> = useCase("Test") {
       startWith { it }
