@@ -12,14 +12,14 @@ jobs:
     name: Build, check ABI, and test on JDK 17
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           # The last version listed becomes JAVA_HOME and runs Gradle; the build compiles with 25.
           java-version: |
             17
             25
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       # Compiles with JDK 25 and runs the tests on JDK 17, the oldest runtime the library supports.
       - run: ./gradlew build checkKotlinAbi -PtestJdk=17 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_25_X64
