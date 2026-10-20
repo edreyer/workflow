@@ -20,6 +20,6 @@ jobs:
           java-version: |
             17
             25
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       # Compiles with JDK 25 and runs the tests on JDK 17, the oldest runtime the library supports.
       - run: ./gradlew build checkKotlinAbi -PtestJdk=17 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_25_X64
