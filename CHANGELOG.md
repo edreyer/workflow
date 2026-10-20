@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 - 2026-10-20
 
-Additive.
+Additive. See [Upgrading from v0.10 to v0.12](docs/migrations/0.12.0.md).
 
 - Added `Workflow.timeout(duration) { error }`, which fails a step with a typed error when it runs too long.
 - Added `Workflow.retry(schedule)`, which runs a step again while an Arrow `Schedule<Failure<E>, *>` allows it. Only the successful attempt's events are kept, and the step is recorded once.
