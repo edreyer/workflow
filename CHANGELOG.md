@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.12.1 - 2026-10-21
+
+Bug fixes. No API changes. See [Upgrading to v0.12.1](docs/migrations/0.12.1.md).
 
 - Added a [tutorial](docs/tutorial/README.md) in 14 chapters that builds one use case from a single step to retries, parallel work and metrics. Every example is a test under `src/test/kotlin/io/liquidsoftware/workflow/tutorial/`.
 - Fixed `retry` and the top-level `parallelJoin` raising errors past an enclosing `mapError`. `step.retry(schedule).mapError { ... }` and `parallelJoin(a, b) { ... }.mapError { ... }` returned the unmapped error, which made an exhaustive `errors` mapper fail with a `ClassCastException`.
