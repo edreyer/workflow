@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added a [tutorial](docs/tutorial/README.md) in 14 chapters that builds one use case from a single step to retries, parallel work and metrics. Every example is a test under `src/test/kotlin/io/liquidsoftware/workflow/tutorial/`.
+- Fixed `retry` raising its last error past an enclosing `mapError`. `step.retry(schedule).mapError { ... }` returned the unmapped error, which made an exhaustive `errors` mapper fail with a `ClassCastException`.
+
 ## 0.12.0 - 2026-10-20
 
 Additive. See [Upgrading from v0.10 to v0.12](docs/migrations/0.12.0.md).

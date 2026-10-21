@@ -25,7 +25,7 @@ public input -> startWith -> state -> step -> state -> step -> ... -> result -> 
 
 A single use case can also be written as a plain function with Arrow's `either { }`. What that lacks is the concept: nothing marks the function as a use case, and nothing gives every use case the same shape. The library stays lightweight and adds exactly that, plus named, timed steps that are attributed when they fail.
 
-For the architectural motivation, see [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md).
+For the architectural motivation, see [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md). To learn the library step by step, follow the [Tutorial](docs/tutorial/README.md).
 
 ## Quick Example
 
@@ -332,6 +332,7 @@ Requires Java 17 or later. Depends on Arrow `arrow-core`, `kotlinx-coroutines-co
 
 ## More Documentation
 
+- [Tutorial](docs/tutorial/README.md) builds one use case in 14 chapters, from a single step to retries, parallel work, and metrics.
 - [Make the Use Cases of Your App Explicit](docs/make-use-cases-explicit.md) explains the design problem this library addresses.
 - [Design Guidance](docs/design-guidance.md) covers when to use this library and how to structure workflows.
 - [Workflow Reference](docs/reference.md) covers every DSL method, errors, context, and logging.
