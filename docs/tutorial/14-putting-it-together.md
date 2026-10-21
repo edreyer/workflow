@@ -11,7 +11,7 @@ fun placeOrder(services: Services, config: UseCaseConfig): UseCase<PlaceOrder, A
   useCase("PlaceOrder", errors = ::toApiError, config = config) {
     startWith { command ->
       ensure(command.items.isNotEmpty()) { OrderError.EmptyCart }
-      Cart(command.customerId, command.items, command.cardToken, command.express)
+      Cart(command.orderId, command.customerId, command.items, command.cardToken, command.express)
     }
       .parallelJoin(loadCustomer(services.customers), priceItems(services.catalog)) { customer, total ->
         PricedOrder(this, customer, total)
@@ -19,7 +19,7 @@ fun placeOrder(services: Services, config: UseCaseConfig): UseCase<PlaceOrder, A
       .thenIf(memberDiscount) { order -> order.customer.member }
       .then(chargeCard(services.gateway))
       .then(fulfil(services.mailer))
-      .result { shipment -> OrderDto(shipment.paid.chargeId, shipment.paid.order.total, shipment.trackingNumber) }
+      .result { shipment -> OrderDto(shipment.paid.order.cart.orderId, shipment.paid.order.total, shipment.trackingNumber) }
       .logging {
         success { (shipment) -> field("express", shipment.paid.order.cart.express) }
       }
@@ -80,8 +80,8 @@ Test at three levels, each with plain functions:
 3. **Use cases** with fake services, asserting on the mapped result. Register an `onSummary` listener to check which steps ran:
 
    ```kotlin
-   val result = PlaceOrderUseCase(services, config)(PlaceOrder("alice", listOf(LineItem("book", 2)), "tok", express = true))
-   // Either.Right(OrderDto("ch-2700", 2_700, "EXP-ch-2700")), after one retried charge
+   val result = PlaceOrderUseCase(services, config)(PlaceOrder("o-1", "alice", listOf(LineItem("book", 2)), "tok", express = true))
+   // Either.Right(OrderDto("o-1", 2_700, "EXP-ch-2700")), after one retried charge
    ```
 
 And callers of a use case don't need its services at all. `UseCase` is a `fun interface`, so a test stands in a lambda:

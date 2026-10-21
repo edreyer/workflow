@@ -32,13 +32,15 @@ import kotlin.time.Duration.Companion.seconds
 
 // ---- Public input and output ----------------------------------------------------------------
 
-data class PlaceOrder(val customerId: String, val items: List<LineItem>, val cardToken: String, val express: Boolean = false)
+// The caller picks the order id, so a retried request can be recognised.
+
+data class PlaceOrder(val orderId: String, val customerId: String, val items: List<LineItem>, val cardToken: String, val express: Boolean = false)
 data class LineItem(val sku: String, val quantity: Int)
 data class OrderDto(val orderId: String, val total: Long, val trackingNumber: String)
 
 // ---- State ----------------------------------------------------------------------------------
 
-data class Cart(val customerId: String, val items: List<LineItem>, val cardToken: String, val express: Boolean)
+data class Cart(val orderId: String, val customerId: String, val items: List<LineItem>, val cardToken: String, val express: Boolean)
 data class Customer(val id: String, val email: String, val member: Boolean)
 data class PricedOrder(val cart: Cart, val customer: Customer, val total: Long)
 data class PaidOrder(val order: PricedOrder, val chargeId: String)
@@ -159,7 +161,7 @@ fun placeOrder(services: Services, config: UseCaseConfig): UseCase<PlaceOrder, A
   useCase("PlaceOrder", errors = ::toApiError, config = config) {
     startWith { command ->
       ensure(command.items.isNotEmpty()) { OrderError.EmptyCart }
-      Cart(command.customerId, command.items, command.cardToken, command.express)
+      Cart(command.orderId, command.customerId, command.items, command.cardToken, command.express)
     }
       .parallelJoin(loadCustomer(services.customers), priceItems(services.catalog)) { customer, total ->
         PricedOrder(this, customer, total)
@@ -167,7 +169,7 @@ fun placeOrder(services: Services, config: UseCaseConfig): UseCase<PlaceOrder, A
       .thenIf(memberDiscount) { order -> order.customer.member }
       .then(chargeCard(services.gateway))
       .then(fulfil(services.mailer))
-      .result { shipment -> OrderDto(shipment.paid.chargeId, shipment.paid.order.total, shipment.trackingNumber) }
+      .result { shipment -> OrderDto(shipment.paid.order.cart.orderId, shipment.paid.order.total, shipment.trackingNumber) }
       .logging {
         success { (shipment) -> field("express", shipment.paid.order.cart.express) }
       }
@@ -204,9 +206,9 @@ class Ch14PuttingItTogetherTest {
     val services = services(PaymentGateway(unavailableFor = 1))
     val useCase = PlaceOrderUseCase(services, config)
 
-    val result = useCase(PlaceOrder("alice", listOf(LineItem("book", 2)), "tok", express = true))
+    val result = useCase(PlaceOrder("o-1", "alice", listOf(LineItem("book", 2)), "tok", express = true))
 
-    assertEquals(Either.Right(OrderDto("ch-2700", 2_700, "EXP-ch-2700")), result)
+    assertEquals(Either.Right(OrderDto("o-1", 2_700, "EXP-ch-2700")), result)
     assertEquals(listOf("alice@example.com: Your order is on its way"), services.mailer.sent)
     assertEquals(
       setOf(
@@ -221,12 +223,12 @@ class Ch14PuttingItTogetherTest {
   fun `maps every failure to an API error`() = runTest {
     val useCase = placeOrder(services(), config)
 
-    assertEquals(Either.Left(ApiError(400, "empty-cart")), useCase(PlaceOrder("bob", emptyList(), "tok")))
-    assertEquals(Either.Left(ApiError(404, "unknown-customer")), useCase(PlaceOrder("eve", listOf(LineItem("pen", 1)), "tok")))
-    assertEquals(Either.Left(ApiError(402, "payment-declined")), useCase(PlaceOrder("bob", listOf(LineItem("pen", 1)), "declined")))
+    assertEquals(Either.Left(ApiError(400, "empty-cart")), useCase(PlaceOrder("o-1", "bob", emptyList(), "tok")))
+    assertEquals(Either.Left(ApiError(404, "unknown-customer")), useCase(PlaceOrder("o-1", "eve", listOf(LineItem("pen", 1)), "tok")))
+    assertEquals(Either.Left(ApiError(402, "payment-declined")), useCase(PlaceOrder("o-1", "bob", listOf(LineItem("pen", 1)), "declined")))
     assertEquals(
       Either.Left(ApiError(503, "payment-unavailable")),
-      placeOrder(services(PaymentGateway(unavailableFor = 5)), config)(PlaceOrder("bob", listOf(LineItem("pen", 1)), "tok")),
+      placeOrder(services(PaymentGateway(unavailableFor = 5)), config)(PlaceOrder("o-1", "bob", listOf(LineItem("pen", 1)), "tok")),
     )
   }
 
@@ -234,6 +236,6 @@ class Ch14PuttingItTogetherTest {
   fun `callers test against a fake use case`() = runTest {
     val controller = OrderController(UseCase { _, _ -> Either.Left(ApiError(503, "payment-unavailable")) })
 
-    assertEquals(503 to "payment-unavailable", controller.post(PlaceOrder("bob", emptyList(), "tok"), "req-1"))
+    assertEquals(503 to "payment-unavailable", controller.post(PlaceOrder("o-1", "bob", emptyList(), "tok"), "req-1"))
   }
 }
