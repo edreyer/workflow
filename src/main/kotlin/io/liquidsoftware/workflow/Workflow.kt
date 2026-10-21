@@ -183,13 +183,7 @@ public fun <I, O, E> Workflow<I, O, E>.retry(schedule: Schedule<Failure<E>, *>):
   val original = this
   return Workflow(id) { input ->
     val result = either<Failure<E>, WorkflowResult<O>> { retry(schedule) { attempt(original, input).bind() } }
-      .getOrElse { failure ->
-        // Raise the last error through this scope, so a mapError or recover around the retry sees it.
-        when (failure) {
-          is Failure.Raised -> raise(failure.error)
-          is Failure.Unexpected -> failures.raise(failure)
-        }
-      }
+      .getOrElse { reraise(it) }
     absorb(result)
     result.state
   }
@@ -216,7 +210,10 @@ public fun <I, O, E, F> Workflow<I, O, E>.recover(
     when (val outcome = attempt(original, input)) {
       is Either.Right -> outcome.value.also { absorb(it) }.state
       is Either.Left -> when (val failure = outcome.value) {
-        is Failure.Raised -> handler(input, failure.error)
+        is Failure.Raised -> {
+          // An error the handler raises is attributed to the step behind the one it handles.
+          recorder.attributingRaises(recorder.failedStepId(failure)) { handler(input, failure.error) }
+        }
         is Failure.Unexpected -> failures.raise(failure)
       }
     }
@@ -272,13 +269,15 @@ public suspend operator fun <I, O, E> Workflow<I, O, E>.invoke(
 public class WorkflowStepScope<in E> private constructor(
   internal val failures: Raise<Failure<Any?>>,
   private val raiseError: (E) -> Nothing,
+  /** Whether raised errors are converted, as inside [mapError], rather than wrapped as they are. */
+  private val convertsErrors: Boolean,
   /** Request metadata the use case was invoked with, such as a correlation ID. */
   public val context: WorkflowContext,
   internal val recorder: ExecutionRecorder,
   private val events: EventBuffer,
 ) : Raise<E> {
   internal constructor(failures: Raise<Failure<Any?>>, context: WorkflowContext, recorder: ExecutionRecorder) :
-    this(failures, { failures.raise(Failure.Raised(it)) }, context, recorder, EventBuffer())
+    this(failures, { failures.raise(recorder.raised(it)) }, false, context, recorder, EventBuffer())
 
   override fun raise(r: E): Nothing = raiseError(r)
 
@@ -294,7 +293,22 @@ public class WorkflowStepScope<in E> private constructor(
 
   /** A scope for the same step whose raised errors go through [raiseError] instead. */
   internal fun <F> withRaisedErrors(raiseError: (F) -> Nothing): WorkflowStepScope<F> =
-    WorkflowStepScope(failures, raiseError, context, recorder, events)
+    WorkflowStepScope(failures, raiseError, true, context, recorder, events)
+
+  /**
+   * Fails this step with the [failure] of a run nested in it. A raised error goes through this
+   * scope, so an enclosing [mapError] converts it. Otherwise the failure is raised as it is, which
+   * keeps the step it is attributed to.
+   */
+  internal fun reraise(failure: Failure<E>): Nothing = when (failure) {
+    is Failure.Raised -> if (convertsErrors) {
+      // The converted error is a new Failure; attribute it to the step behind the original.
+      recorder.attributingRaises(recorder.failedStepId(failure)) { raiseError(failure.error) }
+    } else {
+      failures.raise(failure)
+    }
+    is Failure.Unexpected -> failures.raise(failure)
+  }
 
   internal fun <O> toResult(state: O): WorkflowResult<O> = WorkflowResult(state, events.snapshot(), context)
 }
@@ -350,6 +364,28 @@ internal class ExecutionRecorder private constructor(
   fun attribute(error: Failure<*>, stepId: String?) {
     if (launched || stepId == null) return
     synchronized(root) { forEachLevel { it.failedStepIds[error] = stepId } }
+  }
+
+  private var raisesStepId: String? = null
+
+  /** Runs [block], attributing an error it raises to [stepId] rather than to the step around it. */
+  inline fun <T> attributingRaises(stepId: String?, block: () -> T): T {
+    val previous = swapRaisesStepId(stepId)
+    try {
+      return block()
+    } finally {
+      swapRaisesStepId(previous)
+    }
+  }
+
+  @PublishedApi
+  internal fun swapRaisesStepId(stepId: String?): String? = raisesStepId.also { raisesStepId = stepId }
+
+  /** Wraps a raised error, attributing it as [attributingRaises] asked. */
+  fun <E> raised(error: E): Failure.Raised<E> {
+    val failure = Failure.Raised(error)
+    raisesStepId?.let { attribute(failure, it) }
+    return failure
   }
 
   fun snapshot(): List<WorkflowExecution> = synchronized(root) { root.executions.toList() }

@@ -1,6 +1,7 @@
 package io.liquidsoftware.workflow
 
 import arrow.core.Either
+import arrow.core.getOrElse
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -133,8 +134,7 @@ private fun <I, E, R> parallelJoinOf(
   merge: (I, List<Any?>) -> R,
 ): Workflow<I, R, E> =
   Workflow("parallelJoin(${workflows.joinToString(",") { it.id }})") { input ->
-    // Branch failures are already wrapped, so they pass through without wrapping again.
-    val results = with(failures) { runBranches(workflows, input, context, recorder, policy) { absorb(it) }.bind() }
+    val results = runBranches(workflows, input, context, recorder, policy) { absorb(it) }.getOrElse { reraise(it) }
     merge(input, results.map { it.state })
   }
 

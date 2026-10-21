@@ -136,7 +136,7 @@ public class UseCaseLoggingBuilder<E, S> internal constructor(existing: UseCaseL
     success += fields
   }
 
-  /** Adds fields from the mapped public error when the use case fails. Can be set once. */
+  /** Adds fields from the [Failure] when the use case fails, before the `errors` mapper runs. Can be set once. */
   public fun failure(fields: UseCaseLogFieldCollector.(error: E) -> Unit) {
     check(failure == null) { "failure logging can only be configured once" }
     failure = fields
