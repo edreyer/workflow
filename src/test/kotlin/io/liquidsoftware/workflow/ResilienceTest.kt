@@ -89,6 +89,15 @@ class ResilienceTest {
   }
 
   @Test
+  fun `mapError around a retry maps its last error`() = runTest {
+    val (step, attempts) = flaky({ PaymentError.Unavailable }, { PaymentError.Declined })
+    val mapped = step.retry(Schedule.recurs(1)).mapError { OrderError.Payment(it) }
+
+    assertEquals(Either.Left(Failure.Raised(OrderError.Payment(PaymentError.Declined))), mapped("o-1").map { it.state })
+    assertEquals(2, attempts())
+  }
+
+  @Test
   fun `retry sees thrown exceptions as Failure Unexpected`() = runTest {
     var attempts = 0
     val step = workflow<String, Int, PaymentError>("charge") {

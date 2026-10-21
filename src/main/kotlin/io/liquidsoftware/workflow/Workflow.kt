@@ -2,6 +2,7 @@ package io.liquidsoftware.workflow
 
 import arrow.core.Either
 import arrow.core.Some
+import arrow.core.getOrElse
 import arrow.core.raise.Raise
 import arrow.core.raise.either
 import arrow.resilience.Schedule
@@ -181,7 +182,14 @@ public fun <I, O, E> Workflow<I, O, E>.timeout(duration: Duration, error: () -> 
 public fun <I, O, E> Workflow<I, O, E>.retry(schedule: Schedule<Failure<E>, *>): Workflow<I, O, E> {
   val original = this
   return Workflow(id) { input ->
-    val result = failures.retry(schedule) { attempt(original, input).bind() }
+    val result = either<Failure<E>, WorkflowResult<O>> { retry(schedule) { attempt(original, input).bind() } }
+      .getOrElse { failure ->
+        // Raise the last error through this scope, so a mapError or recover around the retry sees it.
+        when (failure) {
+          is Failure.Raised -> raise(failure.error)
+          is Failure.Unexpected -> failures.raise(failure)
+        }
+      }
     absorb(result)
     result.state
   }
