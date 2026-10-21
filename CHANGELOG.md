@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added a [tutorial](docs/tutorial/README.md) in 14 chapters that builds one use case from a single step to retries, parallel work and metrics. Every example is a test under `src/test/kotlin/io/liquidsoftware/workflow/tutorial/`.
+- Fixed `retry` and the top-level `parallelJoin` raising errors past an enclosing `mapError`. `step.retry(schedule).mapError { ... }` and `parallelJoin(a, b) { ... }.mapError { ... }` returned the unmapped error, which made an exhaustive `errors` mapper fail with a `ClassCastException`.
+- Fixed failure attribution when `mapError` or `recover` wraps a top-level `parallelJoin`: `UseCaseSummary.rootError.workflowId` named the join instead of the branch that failed.
+- Added a test that stacks every step combinator on every other, up to three deep, and runs the result under every pipeline method.
+
 ## 0.12.0 - 2026-10-20
 
 Additive. See [Upgrading from v0.10 to v0.12](docs/migrations/0.12.0.md).

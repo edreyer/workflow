@@ -149,14 +149,16 @@ The `errors` mapper receives the `Failure<E>`, so it can be exhaustive. The
 context is read-only; parallel branches and launched work merge back only their
 events.
 
-`OrderProcessingExampleTest.kt` and `ReadmeExampleTest.kt` keep the documented
-examples compiling and passing. Update them when the public DSL changes.
+`OrderProcessingExampleTest.kt`, `ReadmeExampleTest.kt`, and the chapter files
+in `src/test/kotlin/io/liquidsoftware/workflow/tutorial/` keep the documented
+examples compiling and passing. Update them, and the matching snippets in
+`docs/tutorial/`, when the public DSL changes.
 
 ### Conventions
 
 - A public API change needs `updateKotlinAbi` and the regenerated
   `api/workflow.api` in the same change.
-- Keep `Readme.md` and `docs/reference.md` in sync with the public DSL.
+- Keep `Readme.md`, `docs/reference.md`, and `docs/tutorial/` in sync with the public DSL.
 - Record user-visible changes in `CHANGELOG.md`. A breaking change also needs
   before and after examples in a migration guide under `docs/migrations/`.
 - Codex reviews each pull request when it is opened or marked ready. Address
