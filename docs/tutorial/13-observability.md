@@ -19,7 +19,7 @@ fun placeOrder(config: UseCaseConfig): UseCase<PlaceOrder, Failure<OrderError>, 
   useCase("PlaceOrder", config = config) { ... }
 ```
 
-There is no global state, so each test can give a use case its own config. To adjust the application config for one use case, pass it as the base: `useCaseConfig(appConfig) { onSummary { ... } }` adds a listener and keeps the rest.
+`outcomeStyle` chooses plain or ANSI-coloured outcomes in the debug log, and `defaultSummaryFields` turns the duration, event, and step counts in that log on or off. The values shown are the defaults. There is no global state, so each test can give a use case its own config. To adjust the application config for one use case, pass it as the base: `useCaseConfig(appConfig) { onSummary { ... } }` adds a listener and keeps the rest.
 
 ## Summaries
 

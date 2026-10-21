@@ -48,7 +48,7 @@ Every step in a pipeline must raise the pipeline's error type, a subtype of it, 
 ```kotlin
 sealed interface OrderError {
   data class UnknownProduct(val sku: String) : OrderError
-  data class PaymentFailed(val reason: String) : OrderError
+  data class PaymentFailed(val error: PaymentError) : OrderError
 }
 
 fun placeOrder(catalog: Catalog, gateway: PaymentGateway): UseCase<PlaceOrder, Failure<OrderError>, OrderConfirmation> =
@@ -56,12 +56,12 @@ fun placeOrder(catalog: Catalog, gateway: PaymentGateway): UseCase<PlaceOrder, F
     startWith { command -> Cart(command.customerId, command.items, command.cardToken) }
       .then(priceCart(catalog))
       .then(bulkDiscount)
-      .then(chargeCard(gateway).mapError { error -> OrderError.PaymentFailed(error.toString()) })
+      .then(chargeCard(gateway).mapError { error -> OrderError.PaymentFailed(error) })
       .result { paid -> OrderConfirmation(paid.cart.customerId, paid.total, paid.chargeId) }
   }
 ```
 
-Now the use case reads as a list of named steps: price the cart, apply the bulk discount, charge the card.
+`PaymentFailed` wraps the `PaymentError`, so the `errors` mapper can still tell a decline from insufficient funds. Now the use case reads as a list of named steps: price the cart, apply the bulk discount, charge the card.
 
 ## Testing A Step On Its Own
 
@@ -71,7 +71,7 @@ Call a step like a function, after `import io.liquidsoftware.workflow.invoke`. I
 val result = bulkDiscount(PricedCart(cart, 2_500))
 result.map { it.state } // Either.Right(PricedCart(cart, 2_250))
 
-priceCart(catalog)(cartWithAMug) // Either.Left(Failure.Raised(OrderError.UnknownProduct("mug")))
+priceCart(catalog)(cart.copy(items = listOf(LineItem("mug", 1)))) // Either.Left(Failure.Raised(OrderError.UnknownProduct("mug")))
 ```
 
 ## What You Learned

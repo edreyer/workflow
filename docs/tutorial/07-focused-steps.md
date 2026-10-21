@@ -40,7 +40,7 @@ val placeOrder: UseCase<PlaceOrder, Failure<OrderError>, OrderConfirmation> =
   }
 ```
 
-Each state type says what is known at that point. A `ReadyCheckout` always has a reservation and a shipping cost, so nothing downstream has to check for `null`. When the state type stays the same, the merge block can be a `copy`: `{ quote -> copy(shippingCost = quote.cents) }`.
+In the second merge block, `checkout` and `reservation` are properties of `this`, the `ReservedCheckout`. Each state type says what is known at that point. A `ReadyCheckout` always has a reservation and a shipping cost, so nothing downstream has to check for `null`. When the state type stays the same, the merge block can be a `copy`: `{ quote -> copy(shippingCost = quote.cents) }`.
 
 The step keeps its own id, `reserve-stock`, in the execution history.
 

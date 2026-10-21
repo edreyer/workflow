@@ -32,7 +32,7 @@ fun placeOrder(mailer: Mailer, config: UseCaseConfig = UseCaseConfig.Default): U
 Launched work is for side effects that the outcome doesn't depend on:
 
 - Its failures never fail the use case. Each failure becomes a `LaunchedFailureEvent` with the step's id and a message free of user data, and appears in `UseCaseSummary.launchedFailures` (chapter 13).
-- Its output is ignored, and it keeps the state type.
+- Its output is ignored. The pipeline keeps the state it had before `thenLaunch`.
 - The use case still waits for it before returning, even when a later step fails. Launched work runs inside the invocation; it is not fire-and-forget beyond it. Cancelling the caller cancels it too.
 
 ```kotlin

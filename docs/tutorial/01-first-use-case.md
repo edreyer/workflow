@@ -25,6 +25,14 @@ The input belongs to your API, the output belongs to your API, and the state bel
 
 ## The Use Case
 
+The library's DSL lives in one package:
+
+```kotlin
+import io.liquidsoftware.workflow.Failure
+import io.liquidsoftware.workflow.UseCase
+import io.liquidsoftware.workflow.useCase
+```
+
 ```kotlin
 val prices = mapOf("book" to 1_500L, "pen" to 250L)
 
@@ -47,7 +55,7 @@ Read it top to bottom:
 
 Each call returns a new pipeline typed by its current state. If a step expected a `PricedCart` but the state were still a `Cart`, the code would not compile.
 
-The type `UseCase<PlaceOrder, Failure<Nothing>, OrderConfirmation>` reads as: takes a `PlaceOrder`, fails with a `Failure<Nothing>`, returns an `OrderConfirmation`. `Nothing` says that no step raises an error on purpose. Chapter 2 changes that. Kotlin needs this declared type, or explicit type arguments on `useCase`, to know the input type inside `startWith`.
+The type `UseCase<PlaceOrder, Failure<Nothing>, OrderConfirmation>` reads as: takes a `PlaceOrder`, fails with a `Failure<Nothing>`, returns an `OrderConfirmation`. `Nothing` says that no step raises an error on purpose. The use case can still fail if something throws, for example `getValue` for an unknown SKU; chapter 2 covers both kinds of failure. Kotlin needs this declared type, or explicit type arguments on `useCase`, to know the input type inside `startWith`.
 
 ## Calling It
 
@@ -57,10 +65,10 @@ A use case is a suspend function that returns an Arrow `Either`: `Left` for a fa
 val result = placeOrder(PlaceOrder("c-1", listOf(LineItem("book", 2), LineItem("pen", 1))))
 // Either.Right(OrderConfirmation("c-1", 3_250))
 
-val message = placeOrder(command).fold(
+val message = placeOrder(PlaceOrder("c-1", listOf(LineItem("pen", 4)))).fold(
   ifLeft = { failure -> "failed: $failure" },
   ifRight = { confirmation -> "charged ${confirmation.total}" },
-)
+) // "charged 1000"
 ```
 
 The tests call use cases inside `runTest` from `kotlinx-coroutines-test`. In an application you call them from a controller, a message handler, or anywhere else that can suspend.

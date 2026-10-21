@@ -26,7 +26,7 @@ data class OrderConfirmation(val customerId: String, val total: Long, val charge
 
 sealed interface OrderError {
   data class UnknownProduct(val sku: String) : OrderError
-  data class PaymentFailed(val reason: String) : OrderError
+  data class PaymentFailed(val error: PaymentError) : OrderError
 }
 
 // The payment module has its own error type. It knows nothing about orders.
@@ -71,7 +71,7 @@ fun placeOrder(catalog: Catalog, gateway: PaymentGateway): UseCase<PlaceOrder, F
       .then(priceCart(catalog))
       .then(bulkDiscount)
       // A PaymentError step doesn't fit an OrderError pipeline until it is adapted.
-      .then(chargeCard(gateway).mapError { error -> OrderError.PaymentFailed(error.toString()) })
+      .then(chargeCard(gateway).mapError { error -> OrderError.PaymentFailed(error) })
       .result { paid -> OrderConfirmation(paid.cart.customerId, paid.total, paid.chargeId) }
   }
 
@@ -98,7 +98,7 @@ class Ch04ReusableStepsTest {
       useCase(PlaceOrder("c-1", listOf(LineItem("book", 2)), "tok")),
     )
     assertEquals(
-      Either.Left(Failure.Raised(OrderError.PaymentFailed("Declined"))),
+      Either.Left(Failure.Raised(OrderError.PaymentFailed(PaymentError.Declined))),
       useCase(PlaceOrder("c-1", listOf(LineItem("book", 2)), "declined")),
     )
   }

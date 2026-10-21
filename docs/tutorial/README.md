@@ -2,7 +2,7 @@
 
 This tutorial builds one use case, placing an order in an online shop, from a single step up to a pipeline with typed errors, parallel lookups, retries, background work, and metrics. Each chapter adds one idea to what the previous chapters built.
 
-Every example is a test. The code for chapter N lives in [`src/test/kotlin/io/liquidsoftware/workflow/tutorial/`](../../src/test/kotlin/io/liquidsoftware/workflow/tutorial/) as `ChNN*.kt`, in its own package, and runs with the build, so the examples always compile against the current API. Open the file next to the chapter to see the imports and the whole program, or run a chapter with:
+Every example is a test. The code for chapter N lives in [`src/test/kotlin/io/liquidsoftware/workflow/tutorial/`](../../src/test/kotlin/io/liquidsoftware/workflow/tutorial/) as `ChNN*.kt`, in its own package, and runs with the build, so the examples always compile against the current API. Each file is self-contained: it declares the types the chapter needs, so a type such as `OrderError` gains and loses cases from one chapter to the next. Open the file next to the chapter to see the imports and the whole program, or run a chapter with:
 
 ```bash
 ./gradlew test --tests "io.liquidsoftware.workflow.tutorial.ch01.*"

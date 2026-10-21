@@ -49,7 +49,7 @@ fun placeOrder(orders: Orders): UseCase<PlaceOrder, Failure<Nothing>, OrderConfi
   }
 ```
 
-`events.lastEvent<T>()` returns the last event of type `T`, or `null`. When the event must be there, use `requireEvent<T>()`. If no step emitted it, the use case was wired wrongly, and it fails with `Failure.Unexpected` caused by a `WorkflowCompositionException`.
+`events.lastEvent<T>()` returns the last event of type `T`, or `null`. When the pipeline always emits the event, use `requireEvent<T>()` instead, as the next example does. If no step emitted it, the use case was wired wrongly, and it fails with `Failure.Unexpected` caused by a `WorkflowCompositionException`.
 
 ## Returning Events To The Caller
 
@@ -59,8 +59,8 @@ A common pattern is to return the events, so the caller can publish them, for ex
 data class Placed(val confirmation: OrderConfirmation, val events: List<Event>)
 
 .result { order ->
-  val created = requireEvent<OrderCreated>()
-  Placed(OrderConfirmation(created.orderId, order.total, 0), events)
+  val points = requireEvent<LoyaltyPointsEarned>().points
+  Placed(OrderConfirmation(order.id, order.total, points), events)
 }
 ```
 

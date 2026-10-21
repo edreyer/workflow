@@ -65,8 +65,8 @@ fun placeOrderWithEvents(orders: Orders): UseCase<PlaceOrder, Failure<Nothing>, 
       .then(awardPoints)
       .result { order ->
         // requireEvent fails the use case as wired wrongly if no step emitted the event.
-        val created = requireEvent<OrderCreated>()
-        Placed(OrderConfirmation(created.orderId, order.total, 0), events)
+        val points = requireEvent<LoyaltyPointsEarned>().points
+        Placed(OrderConfirmation(order.id, order.total, points), events)
       }
   }
 

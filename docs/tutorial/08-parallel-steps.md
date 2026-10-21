@@ -16,7 +16,7 @@ val checkStock: Workflow<PlaceOrder, Stock, OrderError> = workflow("check-stock"
 }
 ```
 
-`parallelJoin` runs 2 to 8 steps concurrently on the current state, then the merge block combines their outputs into the next state. The current state is `this`, here the `PlaceOrder`. Each step runs with the same input and is recorded under its own id, and the join itself is recorded as `parallelJoin(load-customer,price-items,check-stock)`. In the test, three 100 ms lookups take 100 ms together.
+`parallelJoin` runs 2 to 8 steps concurrently on the current state, then the merge block combines their outputs into the next state. The current state is `this`, here the `PlaceOrder`. The merge ignores the `Stock` with `_`: `checkStock` matters only because it raises `OutOfStock`. Each step runs with the same input and is recorded under its own id, and the join itself is recorded as `parallelJoin(load-customer,price-items,check-stock)`. In the test, three 100 ms lookups take 100 ms together.
 
 ## `parallel`: Side Effects
 
