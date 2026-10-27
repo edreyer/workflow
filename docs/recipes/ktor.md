@@ -105,9 +105,12 @@ Build the use case with `errors = ::toProblem`, and the route folds its result w
 
 ## Things to know
 
-- **Client disconnects cancel the use case.** Ktor cancels the handler's coroutine, and
-  the use case, its parallel branches and its launched work are children of it. Work
-  that must finish regardless belongs in an outbox or a queue, not in `thenLaunch`.
+- **Cancellation follows the handler.** The use case, its parallel branches and its
+  launched work are children of the handler's coroutine, so they stop when it is
+  cancelled. By default Ktor keeps processing a request after the client disconnects;
+  to stop work for disconnected clients, install the `HttpRequestLifecycle` plugin with
+  `cancelCallOnClose = true` on an engine that supports it. Either way, work that must
+  finish regardless belongs in an outbox or a queue, not in `thenLaunch`.
 - **Don't block in steps.** Steps run on Ktor's dispatcher. Wrap blocking JDBC or SDK
   calls in `withContext(Dispatchers.IO) { }` inside the step, or in the service the
   step calls.
