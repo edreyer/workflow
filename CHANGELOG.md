@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added [recipes](docs/recipes/README.md) for Ktor, Spring Boot, Micrometer metrics, publishing domain events, transactions, blocking and Java callers, and validating input with impossible. The Micrometer, domain events and Java callers recipes are tests under `src/test/kotlin/io/liquidsoftware/workflow/recipes/`, and `RecipeSnippetsTest` keeps their pages in step with that code.
+
 ## 0.12.1 - 2026-10-21
 
 Bug fixes. No API changes. See [Upgrading to v0.12.1](docs/migrations/0.12.1.md).

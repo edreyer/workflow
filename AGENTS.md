@@ -152,13 +152,16 @@ events.
 `OrderProcessingExampleTest.kt`, `ReadmeExampleTest.kt`, and the chapter files
 in `src/test/kotlin/io/liquidsoftware/workflow/tutorial/` keep the documented
 examples compiling and passing. Update them, and the matching snippets in
-`docs/tutorial/`, when the public DSL changes.
+`docs/tutorial/`, when the public DSL changes. The compiled recipes in
+`docs/recipes/` keep their code in `src/test/kotlin/io/liquidsoftware/workflow/recipes/`, and
+`RecipeSnippetsTest` fails if a snippet on their page no longer matches it. The other recipes
+are not compiled, so check them by hand.
 
 ### Conventions
 
 - A public API change needs `updateKotlinAbi` and the regenerated
   `api/workflow.api` in the same change.
-- Keep `Readme.md`, `docs/reference.md`, and `docs/tutorial/` in sync with the public DSL.
+- Keep `Readme.md`, `docs/reference.md`, `docs/tutorial/`, and `docs/recipes/` in sync with the public DSL.
 - Record user-visible changes in `CHANGELOG.md`. A breaking change also needs
   before and after examples in a migration guide under `docs/migrations/`.
 - Codex reviews each pull request when it is opened or marked ready. Address
