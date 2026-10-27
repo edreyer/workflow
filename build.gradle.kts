@@ -33,10 +33,14 @@ dependencies {
   testImplementation(kotlin("test"))
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.logback.classic)
+  // Only for the Micrometer recipe in docs/recipes.
+  testImplementation(libs.micrometer.core)
 }
 
 tasks.test {
   useJUnitPlatform()
+  // RecipeSnippetsTest reads the recipe pages, so a docs-only change must rerun it.
+  inputs.dir("docs/recipes")
   // CI passes -PtestJdk=17 to prove the published bytecode runs on it.
   providers.gradleProperty("testJdk").orNull?.let { jdk ->
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(jdk.toInt())) })

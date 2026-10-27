@@ -93,6 +93,7 @@ controller.post(command, "req-1") // 503 to "payment-unavailable"
 
 ## Where To Go Next
 
+- [Recipes](../recipes/README.md) show the use case behind Ktor and Spring Boot, with metrics, transactions and Java callers.
 - [Workflow Reference](../reference.md) covers every method and its edge cases.
 - [Design Guidance](../design-guidance.md) covers when to use the library, how to size steps, and what to test.
 - [Make the Use Cases of Your App Explicit](../make-use-cases-explicit.md) explains the problem the library solves.
